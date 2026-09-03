@@ -13,7 +13,7 @@ Proyecto orientado al diseño y desarrollo de un minijuego que busca representar
 - IA
 
 ## Características
-- Efectos visuales e interactivos
+- Efectos audiovisuales e interactivos
 - Integración de contenido multimedia generativo
 
 ## Autoría
