@@ -6,7 +6,7 @@ let TIPO_VERDE = 2;
 let TIPO_GRIS_CLARO = 3;
 let TIPO_GRIS_OSCURO = 4;
 
-//Estados de pantalla (para no perderse con los numeros sueltos)
+//Estados de pantalla (identificadores de la máquina de estados)
 let ESTADO_MENU = 0;
 let ESTADO_INSTRUCCIONES = 1;
 let ESTADO_CREDITOS = 2;
@@ -16,7 +16,7 @@ let ESTADO_JUEGO = 3;
 let juego;
 
 //Variables para cargar los archivos:
-let fondo, musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro;
+let fondo, musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, relojIcono, saludIcono, miraIcono;
 
 /*Control de teclado propio (no depende de keyIsDown de p5): se registra en fase de
 captura sobre window, asi el preventDefault llega antes que cualquier otro manejador
@@ -75,12 +75,23 @@ function preload()
   fondo = loadImage("assets/universo.gif");
 
   musica = loadSound("assets/musica.mp3");
-  interceptar = loadSound("assets/destruir-meteorito.mp3");
-  meteorito = loadSound("assets/destruir-bloque.mp3");
+  interceptar = loadSound("assets/desviar-meteorito.mp3");
+  meteorito = loadSound("assets/crater-bloque.mp3");
   muerteSer = loadSound("assets/meteorito-muerte.mp3");
 
   fuenteBoton = loadFont("assets/Montserrat-Medium.ttf");
   fuenteCuadro = loadFont("assets/Montserrat-Regular.ttf");
+
+  alertaIcono = loadImage("assets/alerta.png");
+  astroIcono = loadImage("assets/astronauta.png");
+  meteoritoIcono = loadImage("assets/meteorito.png");
+  musicaEncenderIcono = loadImage("assets/musica-encender.png");
+  musicaApagarIcono = loadImage("assets/musica-apagar.png");
+  pantallaCompletaIcono = loadImage("assets/pantalla-completa.png");
+  pantallaIncompletaIcono = loadImage("assets/pantalla-incompleta.png");
+  relojIcono = loadImage("assets/reloj.png");
+  saludIcono = loadImage("assets/salud.png");
+  miraIcono = loadImage("assets/telescopio.png");
 }
 
 function setup() 
@@ -106,7 +117,7 @@ function draw()
       textFont(fuenteBoton);
       textAlign(CENTER, CENTER);
       textSize(36);
-      text("EQUILIBRIO", 640, 190);
+      text("UMBRAL", 640, 190);
       pop();
 
       dibujarBoton("MÚSICA", 640, 261, 320, 48);
@@ -117,16 +128,16 @@ function draw()
 
     case ESTADO_INSTRUCCIONES:
       image(fondo, 0, 0, width, height);
-      dibujarBoton("INICIO", 640, 645, 320, 48, 0);
-      dibujarCuadro("Usá las flechas del teclado para mover al Astronauta sobre la plataforma, y el mouse para mover la mira y disparar. Si bien no podes saltar, si podes salir por un extremo (arriba, abajo, izquierda o derecha) y aparecer en el opuesto.\nEvitá pisar los bloques rojos dado que te atrapan y se cambia a Rover: el nivel de O2/W baja más rápido y quedas atrapado unos segundos hasta liberarte solo.\nLos bloques grises restan O2 al pisarlos y mientras te quedes quieto en ellos.\nSi un meteorito te golpea, pierdes la partida.\nSi un meteorito golpea algún bloque este se bloquea y no podrás pisarlo; si se bloquea demasiada plataforma, también pierdes.\nSi pisas un bloque verde tu nivel de O2 se estabiliza, pero si permanecés demasiado tiempo quieto en el mismo se agota, pasa a gris y reaparece en otro punto de la plataforma.\nMantené presionado el click izquierdo para disparar contra los meteoritos y destruirlos antes de que impacten.\nCada partida dura 60 segundos y para ganar debés sobrevivir con el nivel de O2 mayor a cero.",
+      dibujarBoton("ATRÁS", 640, 645, 320, 48, 0);
+      dibujarCuadro("Usá las flechas del teclado para mover al Astronauta y el mouse para mover la mira y disparar (mantené click para ráfaga).\nEvitá pisar los bloques rojos y grises: te van a costar O2/W.\nLos bloques verdes estabilizan tu O2/W.\nLos meteoritos son letales si te tocan y peligrosos para la plataforma.\nSobreviví 60 segundos con O2/W mayor a cero.",
       640, 300, 920, 560);
     break;
 
     case ESTADO_CREDITOS:
       image(fondo, 0, 0, width, height);
-      dibujarBoton("INICIO", 640, 669, 320, 48, 0);
-      dibujarCuadro("Autoría: Daniel Toledo.\nTodos los archivos multimedia fueron generados con IA.\nEste juego busca representar la capacidad tecnológica humana actual para poder explorar el universo cómo así también su limitación física al encontrarse con el mismo.\nLos bloques verdes representan a la Tierra, los grises claros a la Luna y los rojos a Marte.\nLas misiones espaciales lunares realizadas inicialmente por animales y luego por humanos hasta la actualidad representan un peligro real no solo por la falta de oxígeno si no también por el deterioro físico que implica para la humanidad abandonar la Tierra debido a la falta de gravedad, los rayos cósmicos y la lluvia de meteoritos en la cara oculta de la luna.\nMarte es el planeta más cercano a la Tierra pero su atmósfera y geografía suponen un reto dado que solamente a través de un robot de exploración marciana (Rover) es que se pudo realizar un reconocimiento pero aún así la última vez no sobrevivió y la humanidad no podría regresar debido a la falta de combustible, imposible de llevar ni de generar localmente.\nEl Telescopio busca representar una máquina del tiempo al poder conocer el pasado del universo dado que la luz tarda demasiado en llegar y de los sistemas de defensa para destrucción de meteoritos.\nLos satélites orbitan la Tierra y ninguna sondas espacial ha podido superar la vía lactea.",
-      640, 327, 1000, 600);
+      dibujarBoton("ATRÁS", 640, 669, 320, 48, 0);
+      dibujarCuadro("Autoría: Daniel Toledo\nEste minijuego representa la capacidad tecnológica humana actual para explorar el universo, y también sus límites físicos al enfrentarlo.",
+      640, 115, 1000, 150);
     break;
 
     case ESTADO_JUEGO:
@@ -165,7 +176,7 @@ function draw()
         else if (juego.nivelO2W <= 0) 
         {
           juego.resultado = "DERROTA";
-          juego.detalleResultado = "Te quedaste sin oxígeno.";
+          juego.detalleResultado = "Te quedaste sin O2/W.";
           juego.frameDeFin = frameCount;
         }
         else if (juego.cantidadBloqueadas >= juego.totalCeldasActivas * juego.porcentajeColapso) 
@@ -302,8 +313,7 @@ class Juego
     this.cantidadBloqueadas = 0;
     this.porcentajeColapso = 0.3;
 
-    /*meteoritos y personajes: el meteorito no es un extra, es la amenaza 
-    (junto al astronauta/rover)*/
+    //meteoritos: amenazas
     this.meteoritos = [];
     //el ritmo de aparicion arranca mas tranquilo y se acelera hacia el final de la partida
     this.intervaloMeteoritoInicial = 46;
@@ -316,6 +326,7 @@ class Juego
     this.cooldownDisparo = 15;
     this.radioDisparo = 26;
 
+    //astronauta: se mueve por filas y columnas, cambia a Rover si queda atrapado en rojo
     this.astronauta = new Astronauta(floor(this.cantidadColumnas / 2), this);
 
     //extras: solo ambientacion de fondo, no interactuan con la partida
