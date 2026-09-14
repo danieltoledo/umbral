@@ -1,5 +1,5 @@
 /*Tipos de bloque de la plataforma, no hay bloque dado que no se puede pisar ni hay 
-superficie ahi (define el "hueco" de la pirámide y los bordes de cada fila)*/
+superficie ahí (define el "hueco" de la pirámide y los bordes de cada fila)*/
 let TIPO_VACIO = 0; 
 let TIPO_ROJO = 1;
 let TIPO_VERDE = 2;
@@ -11,16 +11,23 @@ let ESTADO_MENU = 0;
 let ESTADO_INSTRUCCIONES = 1;
 let ESTADO_CREDITOS = 2;
 let ESTADO_JUEGO = 3;
+let ESTADO_PUNTAJES = 4;
+
+//clave con la que se guardan los puntajes recientes en localStorage
+let CLAVE_PUNTAJES = "umbral_puntajesRecientes";
 
 //Objeto principal del juego
 let juego;
+
+//Referencia al canvas, para poder pedirle pantalla completa a él y no a toda la página
+let lienzo;
 
 //Variables para cargar los archivos:
 let fondo, musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, relojIcono, saludIcono, miraIcono;
 
 /*Control de teclado propio (no depende de keyIsDown de p5): se registra en fase de
-captura sobre window, asi el preventDefault llega antes que cualquier otro manejador
-de la pagina que pudiera estar comiendose el evento.*/
+captura sobre window, así el preventDefault llega antes que cualquier otro manejador
+de la página que pudiera estar comiéndose el evento.*/
 let teclaIzquierdaPresionada = false;
 let teclaDerechaPresionada = false;
 let teclaArribaPresionada = false;
@@ -70,6 +77,17 @@ window.addEventListener("keyup", function(evento_)
   }
 }, true);
 
+/*si se sale de pantalla completa por afuera de nuestro botón (ESC, botón del navegador),
+el canvas tiene que volver a su tamaño normal*/
+document.addEventListener("fullscreenchange", function() 
+{
+  if (document.fullscreenElement == null) 
+  {
+    lienzo.elt.style.width = "";
+    lienzo.elt.style.height = "";
+  }
+});
+
 function preload() 
 {
   fondo = loadImage("assets/universo.gif");
@@ -96,7 +114,7 @@ function preload()
 
 function setup() 
 {
-  createCanvas(1280, 720);
+  lienzo = createCanvas(1280, 720);
   noCursor();
 
   juego = new Juego();
@@ -120,24 +138,69 @@ function draw()
       text("UMBRAL", 640, 190);
       pop();
 
-      dibujarBoton("MÚSICA", 640, 261, 320, 48);
-      dibujarBoton("INSTRUCCIONES", 640, 327, 320, 48, 1);
-      dibujarBoton("CRÉDITOS", 640, 393, 320, 48, 2);
-      dibujarBoton("JUGAR", 640, 459, 320, 48, 3);
+      /*toggles a los costados del título: música a la izquierda, pantalla completa a la derecha.
+      Quedan alineados con el ancho del botón JUGAR (320 de ancho, centrado en 640): el borde 
+      izquierdo del de música coincide con el izquierdo de JUGAR (480) y el borde derecho del 
+      de pantalla completa coincide con el derecho de JUGAR (800)*/
+      dibujarToggle(musica.isPlaying() ? musicaApagarIcono : musicaEncenderIcono, 500, 196, 40);
+      dibujarToggle(document.fullscreenElement ? pantallaIncompletaIcono : pantallaCompletaIcono, 780, 196, 40);
+
+      dibujarBoton("JUGAR", 640, 261, 320, 48, color(224, 205, 170), color(0));
+
+      dibujarBoton("PUNTAJES", 640, 327, 320, 48);
+      dibujarBoton("INSTRUCCIONES", 640, 393, 320, 48);
+      dibujarBoton("CRÉDITOS", 640, 459, 320, 48);
     break;
 
     case ESTADO_INSTRUCCIONES:
       image(fondo, 0, 0, width, height);
-      dibujarBoton("ATRÁS", 640, 645, 320, 48, 0);
-      dibujarCuadro("Usá las flechas del teclado para mover al Astronauta y el mouse para mover la mira y disparar (mantené click para ráfaga).\nEvitá pisar los bloques rojos y grises: te van a costar O2/W.\nLos bloques verdes estabilizan tu O2/W.\nLos meteoritos son letales si te tocan y peligrosos para la plataforma.\nSobreviví 60 segundos con O2/W mayor a cero.",
-      640, 300, 920, 560);
+      dibujarBoton("JUGAR", 640, 510, 320, 48, color(224, 205, 170), color(0));
+      dibujarBoton("ATRÁS", 640, 576, 320, 48, 0);
+      dibujarCuadroInstrucciones();
     break;
 
     case ESTADO_CREDITOS:
       image(fondo, 0, 0, width, height);
-      dibujarBoton("ATRÁS", 640, 669, 320, 48, 0);
+      dibujarBoton("ATRÁS", 640, 450, 320, 48, 0);
       dibujarCuadro("Autoría: Daniel Toledo\nEste minijuego representa la capacidad tecnológica humana actual para explorar el universo, y también sus límites físicos al enfrentarlo.",
-      640, 115, 1000, 150);
+      640, 320, 1000, 150);
+    break;
+
+    case ESTADO_PUNTAJES:
+      image(fondo, 0, 0, width, height);
+      dibujarBoton("ATRÁS", 640, 520, 320, 48, 0);
+
+      //arma el texto con los 3 mejores puntajes guardados en este navegador ("—" si falta alguno)
+      let listaPuntajes = obtenerPuntajes();
+      let textoPuntajes = "MEJORES PUNTAJES\n\n";
+
+      for (let i = 0; i < 3; i = i + 1) 
+      {
+        let datoPuntaje = listaPuntajes[i];
+        textoPuntajes = textoPuntajes + (i + 1) + ". ";
+
+        if (datoPuntaje == undefined) 
+        {
+          textoPuntajes = textoPuntajes + "—";
+        } 
+        else if (datoPuntaje.resultado == "") 
+        {
+          //puntaje viejo, normalizado en obtenerPuntajes() pero sin resultado/O2/W/plataforma
+          textoPuntajes = textoPuntajes + datoPuntaje.segundos + " segundos";
+        } 
+        else 
+        {
+          //no se muestran los segundos: esta pantalla solo lista el top 3, que en la práctica son victorias
+          textoPuntajes = textoPuntajes + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados;
+        }
+
+        if (i < 2) 
+        {
+          textoPuntajes = textoPuntajes + "\n";
+        }
+      }
+
+      dibujarCuadro(textoPuntajes, 640, 300, 980, 240);
     break;
 
     case ESTADO_JUEGO:
@@ -168,12 +231,9 @@ function draw()
         juego.satelite.dibujar(framesTranscurridos);
         juego.sonda.dibujar(framesTranscurridos);
 
-        if (segundosRestantes <= 0) 
-        {
-          juego.resultado = "VICTORIA";
-          juego.frameDeFin = frameCount;
-        } 
-        else if (juego.nivelO2W <= 0) 
+        //las condiciones de derrota van primero: si O2/W o plataforma fallan en el mismo frame 
+        //en que se acaba el tiempo, cuenta como derrota (hace falta O2/W mayor a cero para ganar)
+        if (juego.nivelO2W <= 0) 
         {
           juego.resultado = "DERROTA";
           juego.detalleResultado = "Te quedaste sin O2/W.";
@@ -185,23 +245,90 @@ function draw()
           juego.detalleResultado = "La plataforma colapsó.";
           juego.frameDeFin = frameCount;
         }
+        else if (segundosRestantes <= 0) 
+        {
+          juego.resultado = "VICTORIA";
+          juego.frameDeFin = frameCount;
+        }
+
+        //recién se fijó el resultado en este mismo frame: se guarda el puntaje una única vez (solo victorias)
+        if (juego.resultado == "VICTORIA") 
+        {
+          let segundosSobrevividos = floor(framesTranscurridos / 60);
+          if (segundosSobrevividos > 60) 
+          {
+            segundosSobrevividos = 60;
+          }
+
+          let porcentajeIntactaFinal = 100 - floor((juego.cantidadBloqueadas / juego.totalCeldasActivas) * 100);
+
+          guardarPuntaje(segundosSobrevividos, juego.resultado, juego.nivelO2W, porcentajeIntactaFinal, juego.cantidadDesviados);
+        }
       }
 
       juego.dibujarPlataforma();
       juego.dibujarMeteoritos();
       juego.astronauta.dibujar();
 
-      //HUD del tiempo restante, el nivel y la integridad de la plataforma (borde derecho)
+      //HUD: tiempo como cronómetro, O2/W como batería (verde = vida, rojo = daño) e integridad 
+      //de la plataforma como círculo (gris claro = celdas intactas, gris oscuro = bloqueadas)
       push();
+
+      //tiempo restante en formato M:SS
+      let segundosSoloRestantes = segundosRestantes % 60;
+      let textoSegundos = segundosSoloRestantes < 10 ? "0" + segundosSoloRestantes : "" + segundosSoloRestantes;
+      let textoTiempo = floor(segundosRestantes / 60) + ":" + textoSegundos;
+
       noStroke();
       fill(255);
       textFont(fuenteCuadro);
       textAlign(RIGHT, TOP);
-      textSize(20);
-      text("Tiempo: " + segundosRestantes, 1225, 85);
-      text("O2/W: " + juego.nivelO2W, 1225, 115);
-      let porcentajeIntacta = 100 - floor((juego.cantidadBloqueadas / juego.totalCeldasActivas) * 100);
-      text("Plataforma: " + porcentajeIntacta + "%", 1225, 145);
+      textSize(24);
+      text(textoTiempo, 1225, 50);
+
+      //batería de O2/W: fondo rojo (daño) con relleno verde proporcional a lo que queda
+      let bateriaX = 1153;
+      let bateriaY = 86;
+      let bateriaAncho = 72;
+      let bateriaAlto = 24;
+      let fraccionO2W = juego.nivelO2W / 90;
+      if (fraccionO2W < 0) 
+      {
+        fraccionO2W = 0;
+      }
+
+      noStroke();
+      fill(200, 40, 40);
+      rect(bateriaX, bateriaY, bateriaAncho, bateriaAlto);
+      fill(60, 200, 90);
+      rect(bateriaX, bateriaY, bateriaAncho * fraccionO2W, bateriaAlto);
+      noFill();
+      stroke(255);
+      strokeWeight(2);
+      rect(bateriaX, bateriaY, bateriaAncho, bateriaAlto, 4);
+      noStroke();
+      fill(255);
+      rect(bateriaX + bateriaAncho, bateriaY + bateriaAlto / 2 - 5, 5, 10);
+
+      //círculo de integridad de la plataforma: gris oscuro de fondo, gris claro por lo intacto
+      let circuloX = 1201;
+      let circuloY = 158;
+      let circuloRadio = 22;
+      let fraccionIntacta = 1 - (juego.cantidadBloqueadas / juego.totalCeldasActivas);
+      if (fraccionIntacta < 0) 
+      {
+        fraccionIntacta = 0;
+      }
+
+      noStroke();
+      fill(70);
+      ellipse(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2);
+      fill(210);
+      if (fraccionIntacta > 0) 
+      {
+        arc(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2, -HALF_PI, -HALF_PI + fraccionIntacta * TWO_PI, PIE);
+      }
+
       pop();
 
       if (juego.resultado != "") 
@@ -213,7 +340,8 @@ function draw()
         }
 
         dibujarCuadro(juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + segundosJugados + " segundos.", 640, 327, 500, 230);
-        dibujarBoton("INICIO", 640, 469, 320, 48, 0);
+        dibujarBoton("JUGAR DE NUEVO", 640, 469, 320, 48, 0);
+        dibujarBoton("INICIO", 640, 535, 320, 48, 0);
       }
     break;
   }
@@ -221,14 +349,23 @@ function draw()
   dibujaPuntero();
 }
 
-//se llama una única vez por click (sirve para los botones del menu)
+//se llama una única vez por click (sirve para los botones del menú)
 function mousePressed()
 {
   switch(estado) 
   {
     case ESTADO_MENU:
-      if(mouseOverRect(640, 261, 320, 48))
+      if(mouseOverRect(500, 196, 40, 40))
       {
+        /*se reanuda el AudioContext y se arranca/pausa la música en el mismo paso síncrono del 
+        click: si loop() se llama recién adentro del .then() de userStartAudio(), ese llamado 
+        queda afuera del gesto original y en algunos navegadores el sonido no arranca hasta 
+        recargar la página*/
+        if (getAudioContext().state != "running") 
+        {
+          getAudioContext().resume();
+        }
+
         if(musica.isPlaying())
         {
           musica.pause();
@@ -238,36 +375,61 @@ function mousePressed()
           musica.loop();
         }
       }
-      chequearClick(640, 327, 320, 48, ESTADO_INSTRUCCIONES);
-      chequearClick(640, 393, 320, 48, ESTADO_CREDITOS);
 
-      if(mouseOverRect(640, 459, 320, 48))
+      if(mouseOverRect(780, 196, 40, 40))
       {
-        //frameCount para la partida arranca aca, no antes
+        alternarPantallaCompleta();
+      }
+
+      if(mouseOverRect(640, 261, 320, 48))
+      {
+        //frameCount para la partida arranca acá, no antes
         juego.frameDeInicio = frameCount;
         juego.reiniciar();
         estado = ESTADO_JUEGO;
       }
+
+      chequearClick(640, 327, 320, 48, ESTADO_PUNTAJES);
+      chequearClick(640, 393, 320, 48, ESTADO_INSTRUCCIONES);
+      chequearClick(640, 459, 320, 48, ESTADO_CREDITOS);
     break;
 
     case ESTADO_INSTRUCCIONES:
-      chequearClick(640, 645, 320, 48, ESTADO_MENU);
+      if(mouseOverRect(640, 510, 320, 48))
+      {
+        //mismo reinicio que el botón JUGAR del menú
+        juego.frameDeInicio = frameCount;
+        juego.reiniciar();
+        estado = ESTADO_JUEGO;
+      }
+      chequearClick(640, 576, 320, 48, ESTADO_MENU);
     break;
 
     case ESTADO_CREDITOS:
-      chequearClick(640, 669, 320, 48, ESTADO_MENU);
+      chequearClick(640, 450, 320, 48, ESTADO_MENU);
+    break;
+
+    case ESTADO_PUNTAJES:
+      chequearClick(640, 520, 320, 48, ESTADO_MENU);
     break;
 
     case ESTADO_JUEGO:
       if (juego.resultado != "") 
       {
-        chequearClick(640, 469, 320, 48, ESTADO_MENU);
+        if(mouseOverRect(640, 469, 320, 48))
+        {
+          //mismo reinicio que el botón JUGAR del menú
+          juego.frameDeInicio = frameCount;
+          juego.reiniciar();
+          estado = ESTADO_JUEGO;
+        }
+        chequearClick(640, 535, 320, 48, ESTADO_MENU);
       }
     break;
   }
 }
 
-//POO con IA
+//Programación Orientada a Objetos con Inteligencia Artificial
 
 //Clases
 
@@ -295,11 +457,11 @@ class Juego
     this.nivelO2W = 90;
     this.cantidadDescuentoNivelGris = 3;
     this.cantidadDescuentoNivelRojo = 9;
-    //cuanto tiempo queda atrapado el Rover en un bloque rojo antes de liberarse solo
+    //cuánto tiempo queda atrapado el Rover en un bloque rojo antes de liberarse solo
     this.duracionAtrapadoFrames = 360;
 
     /*un bloque verde (Tierra) no estabiliza para siempre: si el usuario permanece quieto 
-    demasiado tiempo, se agota y pasa a gris claro (Luna), como cualquier otro. Asi no 
+    demasiado tiempo, se agota y pasa a gris claro (Luna), como cualquier otro. Así no 
     alcanza con plantarse en un solo bloque verde*/
     this.duracionVerdeFrames = 240;
 
@@ -308,14 +470,14 @@ class Juego
     this.detalleResultado = "";
 
     /*integridad de la plataforma: si se bloquea demasiado (no solo la celda propia), se 
-    pierde la partida aunque el O2/W este bien. Asi no alcanza con defender un solo bloque*/
+    pierde la partida aunque el O2/W esté bien. Así no alcanza con defender un solo bloque*/
     this.totalCeldasActivas = this.contarCeldasActivas();
     this.cantidadBloqueadas = 0;
     this.porcentajeColapso = 0.3;
 
     //meteoritos: amenazas
     this.meteoritos = [];
-    //el ritmo de aparicion arranca mas tranquilo y se acelera hacia el final de la partida
+    //el ritmo de aparición arranca más tranquilo y se acelera hacia el final de la partida
     this.intervaloMeteoritoInicial = 46;
     this.intervaloMeteoritoFinal = 24;
     this.frameUltimoMeteorito = 0;
@@ -325,11 +487,13 @@ class Juego
     this.proximoFrameDisparo = 0;
     this.cooldownDisparo = 15;
     this.radioDisparo = 26;
+    //cuántos meteoritos desvió el jugador de un disparo en esta partida
+    this.cantidadDesviados = 0;
 
     //astronauta: se mueve por filas y columnas, cambia a Rover si queda atrapado en rojo
     this.astronauta = new Astronauta(floor(this.cantidadColumnas / 2), this);
 
-    //extras: solo ambientacion de fondo, no interactuan con la partida
+    //extras: solo ambientación de fondo, no interactúan con la partida
     this.satelite = new Satelite();
     this.sonda = new Sonda();
   }
@@ -396,6 +560,7 @@ class Juego
     this.meteoritos = [];
     this.frameUltimoMeteorito = 0;
     this.proximoFrameDisparo = 0;
+    this.cantidadDesviados = 0;
     this.astronauta = new Astronauta(floor(this.cantidadColumnas / 2), this);
   }
 
@@ -408,7 +573,7 @@ class Juego
     }
   }
 
-  //método: devuelve el numero de fila (superficie) mas alto activo para una columna dada
+  //método: devuelve el número de fila (superficie) más alto activo para una columna dada
   obtenerFilaSuperficie(columna_) 
   {
     for (let i = this.filas.length - 1; i >= 0; i = i - 1) 
@@ -422,7 +587,7 @@ class Juego
     return 0;
   }
 
-  /*metodo: devuelve el tipo de bloque de una celda puntual (fila y columna exactas), 
+  /*método: devuelve el tipo de bloque de una celda puntual (fila y columna exactas), 
   para el movimiento vertical*/
   obtenerTipoDeCelda(fila_, columna_) 
   {
@@ -447,9 +612,9 @@ class Juego
   }
 
   /*método: para el toroide horizontal. Busca, desde un extremo de la fila hacia el otro,
-  la primera columna activa que NO este bloqueada. Así, si el extremo exacto quedo
-  bloqueado por un meteorito, el toroide sigue funcionando con la celda libre mas cercana
-  a ese extremo (en vez de romperse para siempre). Devuelve -1 si toda la fila esta bloqueada*/
+  la primera columna activa que NO esté bloqueada. Así, si el extremo exacto quedó
+  bloqueado por un meteorito, el toroide sigue funcionando con la celda libre más cercana
+  a ese extremo (en vez de romperse para siempre). Devuelve -1 si toda la fila está bloqueada*/
   buscarColumnaLibreDesdeExtremo(fila_, columnaInicio_, columnaFin_, desdeLaDerecha_) 
   {
     if (desdeLaDerecha_ == true) 
@@ -477,7 +642,7 @@ class Juego
   }
 
   /*método: para el toroide vertical. Misma idea que buscarColumnaLibreDesdeExtremo, pero
-  recorriendo las filas de una columna puntual. Devuelve -1 si toda la columna esta bloqueada*/
+  recorriendo las filas de una columna puntual. Devuelve -1 si toda la columna está bloqueada*/
   buscarFilaLibreDesdeExtremo(columna_, filaTecho_, desdeArriba_) 
   {
     if (desdeArriba_ == true) 
@@ -611,7 +776,7 @@ class Juego
 
   /*método: genera meteoritos nuevos y actualiza los existentes. El intervalo entre 
   apariciones se interpola desde intervaloMeteoritoInicial hasta intervaloMeteoritoFinal 
-  a lo largo de los 60 segundos, así la partida se pone más dificil hacia el final*/
+  a lo largo de los 60 segundos, así la partida se pone más difícil hacia el final*/
   actualizarMeteoritos(framesTranscurridos_) 
   {
     let progresoPartida = constrain(framesTranscurridos_ / (60 * 60), 0, 1);
@@ -641,7 +806,7 @@ class Juego
   }
 
   /*método: mientras se mantenga presionado el click izquierdo, 
-  dispara contra el meteorito bajo la mira (con enfriamiento)*/
+  dispara contra el meteorito en ráfaga*/
   actualizarDisparo() 
   {
     if (mouseIsPressed == false) 
@@ -661,6 +826,7 @@ class Juego
       if (m.activo == true && dist(m.x, m.y, mouseX, mouseY) < this.radioDisparo) 
       {
         m.interceptar();
+        this.cantidadDesviados = this.cantidadDesviados + 1;
         this.proximoFrameDisparo = frameCount + this.cooldownDisparo;
         break;
       }
@@ -681,9 +847,9 @@ class Fila
     this.centroY = centroY_;
     this.bloques = [];
 
-    /*bucle de construccion: recorre las columnas y arma esta fila, con tipo aleatorio en 
-    cada activa se guardan columnaInicio/columnaFin como propiedades: son el rango activo 
-    real de ESTA fila, usado despues para el toroide horizontal (cada fila de la pirámide 
+    /*bucle de construcción: recorre las columnas y arma esta fila, con tipo aleatorio en 
+    cada fila activa se guardan columnaInicio/columnaFin como propiedades: son el rango activo 
+    real de ESTA fila, usado después para el toroide horizontal (cada fila de la pirámide 
     tiene su propio ancho)*/
     this.columnaInicio = floor((this.cantidadColumnas - this.cantidadActiva) / 2);
     this.columnaFin = this.columnaInicio + this.cantidadActiva;
@@ -760,7 +926,7 @@ class Astronauta
     this.velocidadMovimiento = 8;
   }
 
-  //método: actualiza movimiento, posicion en pantalla y nivel de O2/W
+  //método: actualiza movimiento, posición en pantalla y nivel de O2/W
   actualizar(juego_) 
   {
     this.moverse(juego_);
@@ -806,9 +972,9 @@ class Astronauta
       return;
     }
 
-    /*toroide vertical: el techo de cada columna es distinto (la pirámide es mas angosta 
-    arriba). Si el extremo esta bloqueado por un meteorito, se busca la primera celda 
-    libre desde ese extremo (asi un bloqueo puntual no rompe el toroide para siempre)*/
+    /*toroide vertical: el techo de cada columna es distinto (la pirámide es más angosta 
+    arriba). Si el extremo está bloqueado por un meteorito, se busca la primera celda 
+    libre desde ese extremo (así un bloqueo puntual no rompe el toroide para siempre)*/
     let filaTechoColumna = juego_.obtenerFilaSuperficie(this.columna);
 
     if (filaDeseada < 1) 
@@ -820,14 +986,14 @@ class Astronauta
       filaDeseada = juego_.buscarFilaLibreDesdeExtremo(this.columna, filaTechoColumna, false);
     }
 
-    //toda la columna esta bloqueada: no hay donde reaparecer, no se mueve
+    //toda la columna está bloqueada: no hay donde reaparecer, no se mueve
     if (filaDeseada == -1) 
     {
       return;
     }
 
-    /*toroide horizontal: cada fila tiene su propio ancho activo (la pirámide es mas angosta 
-    arriba). Misma idea que el vertical: si el extremo esta bloqueado, se busca la primera 
+    /*toroide horizontal: cada fila tiene su propio ancho activo (la pirámide es más angosta 
+    arriba). Misma idea que el vertical: si el extremo está bloqueado, se busca la primera 
     celda libre desde ese extremo*/
     let columnaInicioFila = juego_.obtenerColumnaInicioFila(filaDeseada);
     let columnaFinFila = juego_.obtenerColumnaFinFila(filaDeseada);
@@ -841,7 +1007,7 @@ class Astronauta
       columnaDeseada = juego_.buscarColumnaLibreDesdeExtremo(filaDeseada, columnaInicioFila, columnaFinFila, false);
     }
 
-    //toda la fila esta bloqueada: no hay donde reaparecer, no se mueve
+    //toda la fila está bloqueada: no hay donde reaparecer, no se mueve
     if (columnaDeseada == -1) 
     {
       return;
@@ -849,7 +1015,7 @@ class Astronauta
 
     let tipoDestino = juego_.obtenerTipoDeCelda(filaDeseada, columnaDeseada);
 
-    //no se puede pisar un bloque bloqueado ni un hueco vacío
+    //no se puede pisar un bloque bloqueado
     if (tipoDestino != TIPO_GRIS_OSCURO && tipoDestino != TIPO_VACIO) 
     {
       this.columna = columnaDeseada;
@@ -865,7 +1031,7 @@ class Astronauta
     this.y = juego_.centroYPlataforma - this.fila * juego_.tamañoBloque;
   }
 
-  //método: aplica el descuento de O2/W segun el bloque pisado y cuanto tiempo lleva ahí
+  //método: aplica el descuento de O2/W según el bloque pisado y cuánto tiempo lleva ahí
   actualizarNivel(juego_) 
   {
     let tipoActual = juego_.obtenerTipoDeCelda(this.fila, this.columna);
@@ -891,7 +1057,7 @@ class Astronauta
       //se mantiene en la misma posición: se acumula el descuento cada segundo
       this.framesQuieto = this.framesQuieto + 1;
 
-      //un verde pisado demasiado tiempo se agota (pasa a gris claro) y deja de estabilizar
+      //un bloque verde pisado demasiado tiempo se agota (pasa a gris claro) y deja de estabilizar
       if (tipoActual == TIPO_VERDE && this.framesQuieto == juego_.duracionVerdeFrames) 
       {
         juego_.agotarVerde(this.fila, this.columna);
@@ -909,7 +1075,7 @@ class Astronauta
         }
       }
 
-      //el Rover queda atrapado un tiempo limitado; después se libera y puede volver a moverse
+      //Rover queda atrapado un tiempo limitado; después se libera y puede volver a moverse como Astronauta
       if (this.atrapado == true && this.framesQuieto >= juego_.duracionAtrapadoFrames) 
       {
         this.atrapado = false;
@@ -925,7 +1091,7 @@ class Astronauta
     }
   }
 
-  //método: dibuja astronauta o rover segun este atrapado o no
+  //método: dibuja astronauta o rover según esté atrapado o no
   dibujar() 
   {
     push();
@@ -960,7 +1126,7 @@ class Astronauta
   }
 }
 
-//cae con rastro, no rebota, explota e impacta (o es interceptado) con sonido paneado
+//cae con rastro, no rebota, se desvía e impacta (o es interceptado) con sonido paneado
 class Meteorito 
 {
   constructor() 
@@ -1053,7 +1219,7 @@ class Meteorito
     }
   }
 
-  //método: el meteorito es destruido en el aire por un disparo, antes de impactar
+  //método: el meteorito es desviado en el aire por un disparo, antes de impactar
   interceptar() 
   {
     this.activo = false;
@@ -1117,7 +1283,8 @@ class Satelite
     this.duracionEnFrames = 900;
   }
 
-  //método: dibuja el satélite según los frames transcurridos desde que arrancó la partida
+  /*método: dibuja el satélite según los frames transcurridos desde que arrancó la partida achicándose 
+  hacia el horizonte y agrandándose hacia la pantalla*/
   dibujar(framesTranscurridos_) 
   {
     let fase = framesTranscurridos_ % this.duracionEnFrames;
@@ -1137,13 +1304,14 @@ class Satelite
     //paneles, mismo tamaño a cada lado
     rect(-16, 0, 20, 8);
     rect(16, 0, 20, 8);
-    //cuerpo central, perpendicular a los paneles y mas corto que la suma de ambos
+    //cuerpo central, perpendicular a los paneles y más corto que la suma de ambos
     rect(0, 0, 10, 16);
     pop();
   }
 }
 
-class Sonda //cruza una sola vez, aproximadamente a mitad de partida
+//cruza una sola vez, aproximadamente a mitad de partida y anuncia el recrudecimiento de meteoritos
+class Sonda
 {
   constructor() 
   {
@@ -1209,9 +1377,19 @@ function colorDeTipo(tipo_)
   return color(0, 0, 0, 0);
 }
 
-//dibuja un botón rectangular centrado en x_, y_
-function dibujarBoton(txt_, x_, y_, ancho_, alto_) 
+/*dibuja un botón rectangular centrado en x_, y_. colorFondo_ y colorTexto_ son opcionales: 
+si no se pasan, el botón queda como siempre (fondo negro, letras blancas)*/
+function dibujarBoton(txt_, x_, y_, ancho_, alto_, colorFondo_, colorTexto_) 
 {
+  if (colorFondo_ == undefined) 
+  {
+    colorFondo_ = color(0);
+  }
+  if (colorTexto_ == undefined) 
+  {
+    colorTexto_ = color(255);
+  }
+
   push();
   translate(x_, y_);
 
@@ -1220,16 +1398,50 @@ function dibujarBoton(txt_, x_, y_, ancho_, alto_)
     scale(1.03);
   }
 
-  fill(0);
+  fill(colorFondo_);
   stroke(255, 255, 255, 40);
   strokeWeight(1);
   rectMode(CENTER);
   rect(0, 0, ancho_, alto_, 6);
   textFont(fuenteBoton);
   textAlign(CENTER, CENTER);
-  fill(255);
+  fill(colorTexto_);
   textSize(16);
   text(txt_, 0, 1);
+  pop();
+}
+
+/*prende o apaga la pantalla completa pidiéndosela al canvas directamente (no a toda la 
+página, que traía consigo elementos como el título de la pestaña) y estirándolo para 
+que cubra toda la pantalla sin franjas negras*/
+function alternarPantallaCompleta() 
+{
+  if (document.fullscreenElement) 
+  {
+    document.exitFullscreen();
+  } 
+  else 
+  {
+    lienzo.elt.requestFullscreen();
+    lienzo.elt.style.width = "100vw";
+    lienzo.elt.style.height = "100vh";
+  }
+}
+
+/*dibuja un ícono cuadrado tipo toggle (música o pantalla completa), centrado en x_, y_,
+con el mismo efecto de agrandado al pasar el mouse que los botones*/
+function dibujarToggle(icono_, x_, y_, tamaño_) 
+{
+  push();
+  translate(x_, y_);
+
+  if(mouseOverRect(x_, y_, tamaño_, tamaño_)) 
+  {
+    scale(1.1);
+  }
+
+  imageMode(CENTER);
+  image(icono_, 0, 0, tamaño_, tamaño_);
   pop();
 }
 
@@ -1238,6 +1450,57 @@ function mouseOverRect(x_centro_, y_centro_, ancho_, alto_)
 {
   return (mouseX > x_centro_-ancho_/2 && mouseX < x_centro_+ancho_/2 &&
   mouseY > y_centro_-alto_/2 && mouseY < y_centro_+alto_/2);
+}
+
+/*cuadro de INSTRUCCIONES: a diferencia de dibujarCuadro() (que centra todo el bloque de texto), 
+acá cada oración lleva su propio ícono a la izquierda y el texto alineado a la izquierda. El 
+"alto" de cada oración es el espacio vertical que ocupa (más grande en la primera porque es 
+la única que ocupa dos líneas)*/
+function dibujarCuadroInstrucciones() 
+{
+  let instrucciones = [
+    { icono: astroIcono, texto: "Usá las flechas del teclado para mover al Astronauta.", alto: 44 },
+    { icono: miraIcono, texto: "Usá el mouse para mover la mira y disparar (mantené click para ráfaga).", alto: 44 },
+    { icono: alertaIcono, texto: "Evitá pisar los bloques rojos y grises: te van a costar O2/W.", alto: 44 },
+    { icono: saludIcono, texto: "Los bloques verdes estabilizan tu O2/W.", alto: 44 },
+    { icono: meteoritoIcono, texto: "Los meteoritos son letales si te tocan y peligrosos para la plataforma.", alto: 44 },
+    { icono: relojIcono, texto: "Sobreviví 60 segundos con O2/W mayor a cero.", alto: 44 }
+  ];
+
+  let ancho = 920;
+  let alto = 300;
+
+  push();
+  translate(640, 310);
+  fill(0, 0, 0, 230);
+  stroke(255, 255, 255, 40);
+  strokeWeight(1);
+  rectMode(CENTER);
+  rect(0, 0, ancho, alto, 6);
+  //vuelve a CORNER: text() con ancho también usa el rectMode vigente, y con CENTER
+  //tomaba xTexto como el centro de la caja de texto en vez de como borde izquierdo
+  rectMode(CORNER);
+
+  let tamañoIcono = 32;
+  let xIcono = -ancho/2 + 24;
+  let xTexto = xIcono + tamañoIcono + 14;
+  let anchoTexto = ancho/2 - 24 - xTexto;
+  let yCursor = -alto/2 + 26;
+
+  textFont(fuenteCuadro);
+  textAlign(LEFT, TOP);
+  fill(255);
+  textSize(18);
+  textLeading(34);
+  imageMode(CORNER);
+
+  for (let i = 0; i < instrucciones.length; i = i + 1) 
+  {
+    image(instrucciones[i].icono, xIcono, yCursor, tamañoIcono, tamañoIcono);
+    text(instrucciones[i].texto, xTexto, yCursor, anchoTexto);
+    yCursor = yCursor + instrucciones[i].alto;
+  }
+  pop();
 }
 
 //dibuja un cuadro de texto con esquinas redondeadas de 6 px
@@ -1282,5 +1545,101 @@ function chequearClick(x_, y_, ancho_, alto_, estadoDestino_)
   if(mouseOverRect(x_, y_, ancho_, alto_)) 
   {
     estado = estadoDestino_;
+  }
+}
+
+/*guarda un puntaje nuevo (resultado, segundos sobrevividos, O2/W final, % de plataforma intacta y 
+cantidad de meteoritos desviados) en localStorage: si ya existe un registro idéntico no lo duplica, 
+ordena por segundos (con O2/W y plataforma como desempate) de mayor a menor y conserva solo los 3 mejores*/
+function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_) 
+{
+  let lista = obtenerPuntajes();
+
+  //si ya hay un puntaje guardado idéntico en los cinco datos, no se agrega una fila repetida
+  let yaExiste = false;
+  for (let i = 0; i < lista.length; i = i + 1) 
+  {
+    if (lista[i].segundos == segundos_ && lista[i].resultado == resultado_ && 
+    lista[i].nivelO2W == nivelO2W_ && lista[i].porcentajePlataforma == porcentajePlataforma_ &&
+    lista[i].cantidadDesviados == cantidadDesviados_) 
+    {
+      yaExiste = true;
+    }
+  }
+
+  if (yaExiste) 
+  {
+    return;
+  }
+
+  lista.push({
+    segundos: segundos_,
+    resultado: resultado_,
+    nivelO2W: nivelO2W_,
+    porcentajePlataforma: porcentajePlataforma_,
+    cantidadDesviados: cantidadDesviados_
+  });
+
+  //orden principal por el promedio de O2/W, % de plataforma y meteoritos desviados; empatado, desempata segundos
+  lista.sort(function(a_, b_) 
+  {
+    let promedioA = (a_.nivelO2W + a_.porcentajePlataforma + a_.cantidadDesviados) / 3;
+    let promedioB = (b_.nivelO2W + b_.porcentajePlataforma + b_.cantidadDesviados) / 3;
+
+    if (promedioB != promedioA) 
+    {
+      return promedioB - promedioA;
+    }
+    return b_.segundos - a_.segundos;
+  });
+
+  lista = lista.slice(0, 3);
+
+  localStorage.setItem(CLAVE_PUNTAJES, JSON.stringify(lista));
+}
+
+//lee la lista de puntajes guardados en este navegador (array vacío si no hay nada o el dato está corrupto)
+function obtenerPuntajes() 
+{
+  let datos = localStorage.getItem(CLAVE_PUNTAJES);
+
+  if (!datos) 
+  {
+    return [];
+  }
+
+  try 
+  {
+    let lista = JSON.parse(datos);
+    if (!Array.isArray(lista)) 
+    {
+      return [];
+    }
+
+    //normaliza puntajes guardados antes de sumar resultado, O2/W y plataforma (venían como número suelto)
+    for (let i = 0; i < lista.length; i = i + 1) 
+    {
+      if (typeof lista[i] == "number") 
+      {
+        lista[i] = {
+          segundos: lista[i],
+          resultado: "",
+          nivelO2W: null,
+          porcentajePlataforma: null,
+          cantidadDesviados: 0
+        };
+      }
+      //normaliza puntajes guardados antes de sumar la cantidad de meteoritos desviados
+      else if (lista[i].cantidadDesviados == undefined) 
+      {
+        lista[i].cantidadDesviados = 0;
+      }
+    }
+
+    return lista;
+  } 
+  catch (error) 
+  {
+    return [];
   }
 }
