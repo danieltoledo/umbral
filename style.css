@@ -14,5 +14,6 @@ h1
 canvas 
 {
   display: block;
-  margin:auto;
+  margin: auto;
+  object-fit: contain;
 }

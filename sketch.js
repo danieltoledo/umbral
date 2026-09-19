@@ -23,7 +23,16 @@ let juego;
 let lienzo;
 
 //Variables para cargar los archivos:
-let fondo, musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, relojIcono, saludIcono, miraIcono;
+let musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, 
+meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, 
+relojIcono, saludIcono, miraIcono;
+
+//estrellas del fondo procedural, generadas una sola vez en setup()
+let estrellas = [];
+
+
+//control para evitar saturar el motor de audio con impactos de meteoritos casi simultáneos
+let frameUltimoSonidoMeteorito = -10;
 
 /*Control de teclado propio (no depende de keyIsDown de p5): se registra en fase de
 captura sobre window, así el preventDefault llega antes que cualquier otro manejador
@@ -35,7 +44,13 @@ let teclaAbajoPresionada = false;
 
 window.addEventListener("keydown", function(evento_) 
 {
-  if (evento_.code == "ArrowLeft" || evento_.code == "ArrowRight" || evento_.code == "ArrowUp" || evento_.code == "ArrowDown") 
+  if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+  {
+    getAudioContext().resume();
+  }
+
+  if (evento_.code == "ArrowLeft" || evento_.code == "ArrowRight" || evento_.code == "ArrowUp" || 
+  evento_.code == "ArrowDown") 
   {
     evento_.preventDefault();
   }
@@ -77,21 +92,72 @@ window.addEventListener("keyup", function(evento_)
   }
 }, true);
 
-/*si se sale de pantalla completa por afuera de nuestro botón (ESC, botón del navegador),
-el canvas tiene que volver a su tamaño normal*/
+/*si la ventana pierde el foco (por ejemplo con Alt+Tab), se liberan las teclas para 
+que el personaje no quede moviéndose solo y se suspende el audio para evitar buffer underruns*/
+window.addEventListener("blur", function() 
+{
+  teclaIzquierdaPresionada = false;
+  teclaDerechaPresionada = false;
+  teclaArribaPresionada = false;
+  teclaAbajoPresionada = false;
+
+  if (typeof getAudioContext == "function" && getAudioContext().state == "running") 
+  {
+    getAudioContext().suspend();
+  }
+});
+
+/*si el navegador suspende el audio al cambiar de pestaña o salir de pantalla completa, 
+se reanuda automáticamente al volver a la ventana con el búfer limpio*/
+window.addEventListener("focus", function() 
+{
+  if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+  {
+    getAudioContext().resume();
+  }
+});
+
+document.addEventListener("visibilitychange", function() 
+{
+  if (document.visibilityState == "visible") 
+  {
+    if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+    {
+      getAudioContext().resume();
+    }
+  } 
+  else 
+  {
+    if (typeof getAudioContext == "function" && getAudioContext().state == "running") 
+    {
+      getAudioContext().suspend();
+    }
+  }
+});
+
+/*si se sale o entra de pantalla completa (sea por nuestro botón, ESC o el navegador),
+el canvas sincroniza su tamaño y se asegura de que el audio siga activo*/
 document.addEventListener("fullscreenchange", function() 
 {
   if (document.fullscreenElement == null) 
   {
     lienzo.elt.style.width = "";
     lienzo.elt.style.height = "";
+  } 
+  else 
+  {
+    lienzo.elt.style.width = "100vw";
+    lienzo.elt.style.height = "100vh";
+  }
+
+  if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+  {
+    getAudioContext().resume();
   }
 });
 
 function preload() 
 {
-  fondo = loadImage("assets/universo.gif");
-
   musica = loadSound("assets/musica.mp3");
   interceptar = loadSound("assets/desviar-meteorito.mp3");
   meteorito = loadSound("assets/crater-bloque.mp3");
@@ -117,7 +183,407 @@ function setup()
   lienzo = createCanvas(1280, 720);
   noCursor();
 
+  inicializarColoresBloques();
+  inicializarColoresBotones();
+  inicializarInstrucciones();
+  generarEstrellas();
+  generarNebulosas();
+  generarViñeta();
+  crearBufferNebulosa();
+  crearBufferEstrellas();
+  redibujarNebulosa();
+  redibujarEstrellas();
+
+  outputVolume(0.7);
+  musica.setLoop(true);
+  musica.amp(0.3);
+  meteorito.amp(0.35);
+  interceptar.amp(0.3);
+  muerteSer.amp(0.6);
+
   juego = new Juego();
+}
+
+/*viñeta: degradé radial real generado una sola vez (vía drawingContext, el 
+contexto 2D nativo del canvas), que oscurece las esquinas como en una foto astronómica*/
+let gradienteViñeta;
+
+function generarViñeta() 
+{
+  gradienteViñeta = drawingContext.createRadialGradient(width / 2, height / 2, height * 0.32, 
+  width / 2, height / 2, height * 0.85);
+  gradienteViñeta.addColorStop(0, "rgba(0, 0, 0, 0)");
+  gradienteViñeta.addColorStop(1, "rgba(0, 0, 0, 0.55)");
+}
+
+function dibujarViñeta() 
+{
+  drawingContext.fillStyle = gradienteViñeta;
+  drawingContext.fillRect(0, 0, width, height);
+}
+
+/*genera las estrellas del fondo una sola vez: cuatro capas (polvo, lejana, media, cercana) con 
+distinto tamaño y brillo, para reforzar la sensación de profundidad. Se generan un poco más 
+allá de los bordes del canvas (por eso el -40/+40) para que la deriva automática (ver 
+dibujarEstrellas) nunca deje ver un borde vacío*/
+function generarEstrellas() 
+{
+  /*capa de polvo: muchísimas estrellas diminutas y muy tenues, para la densidad de fondo que se 
+  ve en fotos reales (sin esto, el cielo queda con muy pocas luces). Bajada de 900 a 450: sigue 
+  dando densidad de fondo pero son 450 ellipse() menos por frame*/
+  for (let i = 0; i < 450; i = i + 1) 
+  {
+    let rRojo = floor(random(210, 255));
+    let rVerde = floor(random(210, 255));
+    let rAzul = floor(random(225, 255));
+
+    estrellas.push
+    ({
+      x: random(-40, width + 40),
+      y: random(-40, height + 40),
+      radio: random(0.3, 0.7),
+      fase: random(0, TWO_PI),
+      velocidad: random(0.015, 0.04),
+      brilloMin: random(6, 18),
+      brilloMax: random(35, 65),
+      colorEstilo: "rgb(" + rRojo + "," + rVerde + "," + rAzul + ")",
+      capa: "polvo"
+    });
+  }
+
+  for (let i = 0; i < 320; i = i + 1) 
+  {
+    let rRojo = floor(random(210, 255));
+    let rVerde = floor(random(210, 255));
+    let rAzul = floor(random(225, 255));
+
+    estrellas.push
+    ({
+      x: random(-40, width + 40),
+      y: random(-40, height + 40),
+      radio: random(0.6, 1.3),
+      fase: random(0, TWO_PI),
+      velocidad: random(0.02, 0.05),
+      brilloMin: random(15, 45),
+      brilloMax: random(90, 150),
+      colorEstilo: "rgb(" + rRojo + "," + rVerde + "," + rAzul + ")",
+      capa: "lejana"
+    });
+  }
+
+  for (let i = 0; i < 110; i = i + 1) 
+  {
+    let rRojo = floor(random(210, 255));
+    let rVerde = floor(random(210, 255));
+    let rAzul = floor(random(225, 255));
+
+    estrellas.push
+    ({
+      x: random(-40, width + 40),
+      y: random(-40, height + 40),
+      radio: random(1.2, 2.0),
+      fase: random(0, TWO_PI),
+      velocidad: random(0.025, 0.06),
+      brilloMin: random(50, 90),
+      brilloMax: random(160, 210),
+      colorEstilo: "rgb(" + rRojo + "," + rVerde + "," + rAzul + ")",
+      capa: "media"
+    });
+  }
+
+  /*muy pocas estrellas "cercanas", y de esas, solo un puñado bastante más brillante que el resto. 
+  Las "destacadas" son directamente más brillantes y más grandes.*/
+  for (let i = 0; i < 35; i = i + 1) 
+  {
+    let esDestacada = random(0, 1) < 0.2;
+    let rRojo = floor(random(215, 255));
+    let rVerde = floor(random(215, 255));
+    let rAzul = floor(random(230, 255));
+
+    estrellas.push({
+      x: random(-40, width + 40),
+      y: random(-40, height + 40),
+      radio: esDestacada ? random(2.2, 3.0) : random(1.4, 2.0),
+      fase: random(0, TWO_PI),
+      velocidad: random(0.02, 0.045),
+      brilloMin: esDestacada ? random(80, 110) : random(40, 70),
+      brilloMax: esDestacada ? random(235, 255) : random(150, 190),
+      colorEstilo: "rgb(" + rRojo + "," + rVerde + "," + rAzul + ")",
+      destacada: esDestacada,
+      capa: "cercana"
+    });
+  }
+}
+
+//fondo procedural: cielo, nebulosa realista, estrellas titilando y viñeta.
+function dibujarFondo() 
+{
+  background(4, 4, 12);
+  actualizarBufferNebulosaSiCorresponde();
+  image(bufferNebulosa, 0, 0, width, height);
+  actualizarBufferEstrellasSiCorresponde();
+  image(bufferEstrellas, 0, 0, width, height);
+  dibujarViñeta();
+}
+
+/*buffer aparte para las estrellas, mismo criterio que el de la nebulosa: se recalculan y 
+repintan sus ~915 círculos de forma intercalada con la nebulosa para no sobrecargar ningún frame. 
+La deriva más rápida es de 0.07 px/frame (capa "cercana"), así que en 4 frames se mueven 
+como mucho ~0.28px — imperceptible — y el brillo se sigue viendo fluido*/
+let bufferEstrellas;
+
+function crearBufferEstrellas() 
+{
+  bufferEstrellas = createGraphics(width, height);
+}
+
+function actualizarBufferEstrellasSiCorresponde() 
+{
+  /*se actualiza en frames pares no divisibles por 4 (2, 6, 10...) para intercalarse 
+  exactamente con la nebulosa (0, 4, 8...) y nunca coincidir en el mismo frame*/
+  if (frameCount % 4 != 2) 
+  {
+    return;
+  }
+
+  redibujarEstrellas();
+}
+
+function redibujarEstrellas() 
+{
+  bufferEstrellas.clear();
+
+  let contexto = bufferEstrellas.drawingContext;
+
+  for (let i = 0; i < estrellas.length; i = i + 1) 
+  {
+    let e = estrellas[i];
+    let brillo = map(sin(frameCount * e.velocidad + e.fase), -1, 1, e.brilloMin, e.brilloMax);
+    let radioActual = e.radio * map(brillo, e.brilloMin, e.brilloMax, 0.75, 1.25);
+
+    /*deriva automática y constante por capa: las cercanas se corren más rápido que las lejanas, 
+    dando la sensación de estar atravesando el espacio (parallax). El módulo con "width + 80" 
+    hace que, al salir por un borde, la estrella reaparezca del otro lado sin que se note el salto*/
+    let derivaCapa = 0.006;
+    if (e.capa == "lejana") 
+    {
+      derivaCapa = 0.015;
+    }
+    if (e.capa == "media") 
+    {
+      derivaCapa = 0.035;
+    }
+    if (e.capa == "cercana") 
+    {
+      derivaCapa = 0.07;
+    }
+
+    let x = ((e.x + frameCount * derivaCapa + 40) % (width + 80)) - 40;
+
+    contexto.fillStyle = e.colorEstilo;
+    contexto.globalAlpha = brillo / 255;
+    contexto.beginPath();
+    contexto.arc(x, e.y, radioActual, 0, TWO_PI);
+    contexto.fill();
+  }
+
+  contexto.globalAlpha = 1;
+}
+
+/*nebulosa: varios cúmulos de partículas de colores superpuestas con mezcla aditiva, como una 
+nube real vista en fotografías astronómicas (no una forma geométrica lisa)*/
+let nebulosas = [];
+
+/*vetas de polvo oscuras que se dibujan encima de la nebulosa, sin mezcla aditiva, para que la 
+nube no quede como una mancha de color pareja*/
+let filamentos = [];
+
+function generarNebulosas() 
+{
+  //cúmulo lejano: grande, difuso, cubre buena parte del cielo, colores fríos
+  nebulosas.push(crearCumulo(360, 220, 560, 65, 
+  [color(70, 60, 140), color(40, 110, 160), color(90, 50, 130)], 0.16, 0.0025));
+
+  //cúmulo cercano: más chico, más denso y saturado, colores cálidos mezclados
+  nebulosas.push(crearCumulo(820, 260, 340, 36, 
+  [color(200, 60, 130), color(140, 70, 200), color(80, 130, 210)], 0.32, 0.004));
+
+  //tercer cúmulo, más chico y saturado todavía, para reforzar la profundidad
+  nebulosas.push(crearCumulo(980, 400, 200, 20, 
+  [color(220, 90, 150), color(160, 90, 220)], 0.4, 0.006));
+
+  /*dos cúmulos más, del lado izquierdo y arriba a la derecha, para que la nebulosa cubra 
+  bastante más cielo y no se sienta concentrada en un solo sector*/
+  nebulosas.push(crearCumulo(150, 520, 320, 29, 
+  [color(60, 90, 160), color(90, 60, 150)], 0.2, 0.003));
+
+  nebulosas.push(crearCumulo(1100, 140, 280, 26, 
+  [color(150, 70, 190), color(70, 100, 200)], 0.24, 0.0035));
+
+  filamentos.push(crearFilamento(430, 260, 260, 40, 0.35, 0.0008));
+  filamentos.push(crearFilamento(860, 300, 180, 26, -0.5, 0.0012));
+}
+
+/*crea un cúmulo: un grupo de partículas dispersas alrededor de un centro, con más densidad 
+hacia el medio (usando el promedio de tres random() para acercarse a una distribución normal)*/
+function crearCumulo(cx_, cy_, radioZona_, cantidad_, colores_, alfaBase_, velocidadDrift_) 
+{
+  let particulas = [];
+
+  for (let i = 0; i < cantidad_; i = i + 1) 
+  {
+    let angulo = random(0, TWO_PI);
+    let distNormal = (random(0, 1) + random(0, 1) + random(0, 1)) / 3;
+    let dist = distNormal * radioZona_;
+    /*se elige el color de la paleta y se descomponen sus canales una sola vez acá (no en 
+    cada frame)*/
+    let colorElegido = colores_[floor(random(0, colores_.length))];
+    let rRojo = floor(red(colorElegido));
+    let rVerde = floor(green(colorElegido));
+    let rAzul = floor(blue(colorElegido));
+
+    particulas.push
+    ({
+      dx: cos(angulo) * dist,
+      dy: sin(angulo) * dist * 0.55,
+      radio: random(40, 110) * (1 - dist / radioZona_ * 0.4),
+      colorEstilo: "rgb(" + rRojo + "," + rVerde + "," + rAzul + ")",
+      fase: random(0, TWO_PI),
+      velocidadPulso: random(0.003, 0.008)
+    });
+  }
+
+  return { cx: cx_, cy: cy_, particulas: particulas, alfaBase: alfaBase_, 
+  velocidadDrift: velocidadDrift_, fase: random(0, 1000) };
+}
+
+/*crea un filamento oscuro: partículas casi negras repartidas en una franja angosta y alargada 
+(largo_ x ancho_), rotada según angulo_ (en radianes), para simular una veta de polvo real. 
+velocidadDrift_ le da la misma deriva orgánica y automática que tienen los cúmulos de nebulosa*/
+function crearFilamento(cx_, cy_, largo_, ancho_, angulo_, velocidadDrift_) 
+{
+  let particulas = [];
+
+  for (let i = 0; i < 50; i = i + 1) 
+  {
+    let a1 = random(-largo_ / 2, largo_ / 2);
+    let a2 = random(-ancho_ / 2, ancho_ / 2) * ((random(0, 1) + random(0, 1)) / 2);
+
+    particulas.push({
+      dx: cos(angulo_) * a1 - sin(angulo_) * a2,
+      dy: sin(angulo_) * a1 + cos(angulo_) * a2,
+      radio: random(30, 60),
+      fase: random(0, TWO_PI),
+      velocidadPulso: random(0.002, 0.005)
+    });
+  }
+
+  return { cx: cx_, cy: cy_, particulas: particulas, velocidadDrift: velocidadDrift_, 
+  fase: random(0, 1000) };
+}
+
+/*buffer aparte para la nebulosa (cúmulos + filamentos), del mismo tamaño que el canvas. La 
+nebulosa deriva muy lento (velocidadDrift entre 0.0025 y 0.006 rad/frame). Se dibuja en este buffer 
+y se vuelve a calcular de forma intercalada con las estrellas
+(ver actualizarBufferNebulosaSiCorresponde); mientras tanto, dibujarFondo() reusa la 
+imagen ya calculada con un solo image(), igual que ya se hacía con la viñeta*/
+let bufferNebulosa;
+
+function crearBufferNebulosa() 
+{
+  bufferNebulosa = createGraphics(width, height);
+}
+
+/*método: se actualiza en frames múltiplos de 4 (0, 4, 8...) para intercalarse exactamente 
+con las estrellas (2, 6, 10...) y nunca coincidir en el mismo frame*/
+function actualizarBufferNebulosaSiCorresponde() 
+{
+  if (frameCount % 4 != 0) 
+  {
+    return;
+  }
+
+  redibujarNebulosa();
+}
+
+function redibujarNebulosa() 
+{
+  bufferNebulosa.clear();
+
+  let contexto = bufferNebulosa.drawingContext;
+
+  //cúmulos, con mezcla aditiva (como una nube real vista en fotos astronómicas)
+  contexto.save();
+  contexto.globalCompositeOperation = "lighter";
+
+  for (let n = 0; n < nebulosas.length; n = n + 1) 
+  {
+    let cumulo = nebulosas[n];
+    //deriva lenta y automática de todo el cúmulo, en una trayectoria orgánica (no lineal)
+    let derivaX = sin(frameCount * cumulo.velocidadDrift + cumulo.fase) * 70;
+    let derivaY = cos(frameCount * cumulo.velocidadDrift * 0.7 + cumulo.fase) * 35;
+
+    for (let i = 0; i < cumulo.particulas.length; i = i + 1) 
+    {
+      let p = cumulo.particulas[i];
+      let pulso = map(sin(frameCount * p.velocidadPulso + p.fase), -1, 1, 0.6, 1.15);
+      let x = cumulo.cx + p.dx + derivaX;
+      let y = cumulo.cy + p.dy + derivaY;
+      let alfa = cumulo.alfaBase * pulso * 8;
+
+      dibujarManchaEnContexto(contexto, x, y, p.radio * pulso, p.colorEstilo, alfa);
+    }
+  }
+
+  contexto.restore();
+
+  /*vetas de polvo encima de la nebulosa, con mezcla normal (no aditiva) para que resten brillo 
+  en vez de sumarlo: es lo que rompe la mancha de color pareja y le da textura más real*/
+  contexto.save();
+  contexto.fillStyle = "rgb(4, 4, 12)";
+
+  for (let f = 0; f < filamentos.length; f = f + 1) 
+  {
+    let filamento = filamentos[f];
+    let derivaX = sin(frameCount * filamento.velocidadDrift + filamento.fase) * 18;
+    let derivaY = cos(frameCount * filamento.velocidadDrift * 0.7 + filamento.fase) * 10;
+
+    for (let i = 0; i < filamento.particulas.length; i = i + 1) 
+    {
+      let p = filamento.particulas[i];
+      let pulso = map(sin(frameCount * p.velocidadPulso + p.fase), -1, 1, 0.7, 1);
+      let x = filamento.cx + p.dx + derivaX;
+      let y = filamento.cy + p.dy + derivaY;
+
+      let alfaFilamento = 26 * pulso;
+      contexto.globalAlpha = alfaFilamento / 255;
+      contexto.beginPath();
+      contexto.arc(x, y, p.radio * pulso, 0, TWO_PI);
+      contexto.fill();
+    }
+  }
+
+  contexto.globalAlpha = 1;
+  contexto.restore();
+}
+
+/*aproxima un degradé radial suave dibujando círculos concéntricos con alfa creciente, 
+directo sobre el contexto nativo que se le pase (el del buffer de la nebulosa)*/
+function dibujarManchaEnContexto(contexto_, x_, y_, radioMax_, colorEstilo_, alfaBase_) 
+{
+  let capas = 2;
+  contexto_.fillStyle = colorEstilo_;
+
+  for (let i = capas; i >= 1; i = i - 1) 
+  {
+    let radio = radioMax_ * (i / capas);
+    let alfa = alfaBase_ * (1 - i / capas + 0.2);
+
+    contexto_.globalAlpha = alfa / 255;
+    contexto_.beginPath();
+    contexto_.arc(x_, y_, radio, 0, TWO_PI);
+    contexto_.fill();
+  }
 }
 
 //Máquina de estados
@@ -125,10 +591,19 @@ let estado = ESTADO_MENU;
 
 function draw() 
 {
+  //guardián: cada 1 segundo verifica que el motor de audio siga activo si la ventana está visible
+  if (frameCount % 60 == 0 && document.visibilityState == "visible") 
+  {
+    if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+    {
+      getAudioContext().resume();
+    }
+  }
+
   switch(estado) 
   {
     case ESTADO_MENU:
-      image(fondo, 0, 0, width, height);
+      dibujarFondo();
 
       push();
       fill(255);
@@ -143,7 +618,8 @@ function draw()
       izquierdo del de música coincide con el izquierdo de JUGAR (480) y el borde derecho del 
       de pantalla completa coincide con el derecho de JUGAR (800)*/
       dibujarToggle(musica.isPlaying() ? musicaApagarIcono : musicaEncenderIcono, 500, 196, 40);
-      dibujarToggle(document.fullscreenElement ? pantallaIncompletaIcono : pantallaCompletaIcono, 780, 196, 40);
+      dibujarToggle(document.fullscreenElement ? pantallaIncompletaIcono : pantallaCompletaIcono, 
+      780, 196, 40);
 
       dibujarBoton("JUGAR", 640, 261, 320, 48, color(224, 205, 170), color(0));
 
@@ -153,21 +629,21 @@ function draw()
     break;
 
     case ESTADO_INSTRUCCIONES:
-      image(fondo, 0, 0, width, height);
+      dibujarFondo();
       dibujarBoton("JUGAR", 640, 510, 320, 48, color(224, 205, 170), color(0));
       dibujarBoton("ATRÁS", 640, 576, 320, 48, 0);
       dibujarCuadroInstrucciones();
     break;
 
     case ESTADO_CREDITOS:
-      image(fondo, 0, 0, width, height);
+      dibujarFondo();
       dibujarBoton("ATRÁS", 640, 450, 320, 48, 0);
       dibujarCuadro("Autoría: Daniel Toledo\nEste minijuego representa la capacidad tecnológica humana actual para explorar el universo, y también sus límites físicos al enfrentarlo.",
       640, 320, 1000, 150);
     break;
 
     case ESTADO_PUNTAJES:
-      image(fondo, 0, 0, width, height);
+      dibujarFondo();
       dibujarBoton("ATRÁS", 640, 520, 320, 48, 0);
 
       //arma el texto con los 3 mejores puntajes guardados en este navegador ("—" si falta alguno)
@@ -190,8 +666,10 @@ function draw()
         } 
         else 
         {
-          //no se muestran los segundos: esta pantalla solo lista el top 3, que en la práctica son victorias
-          textoPuntajes = textoPuntajes + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados;
+          /*no se muestran los segundos: esta pantalla solo lista el top 3, que en la práctica son 
+          victorias*/
+          textoPuntajes = textoPuntajes + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + 
+          datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados;
         }
 
         if (i < 2) 
@@ -204,7 +682,7 @@ function draw()
     break;
 
     case ESTADO_JUEGO:
-      image(fondo, 0, 0, width, height);
+      dibujarFondo();
 
       //el tiempo mostrado se congela apenas hay resultado (frameDeFin queda fijo)
       let framesTranscurridos;
@@ -231,8 +709,8 @@ function draw()
         juego.satelite.dibujar(framesTranscurridos);
         juego.sonda.dibujar(framesTranscurridos);
 
-        //las condiciones de derrota van primero: si O2/W o plataforma fallan en el mismo frame 
-        //en que se acaba el tiempo, cuenta como derrota (hace falta O2/W mayor a cero para ganar)
+        /*las condiciones de derrota van primero: si O2/W o plataforma fallan en el mismo frame 
+        en que se acaba el tiempo, cuenta como derrota (hace falta O2/W mayor a cero para ganar)*/
         if (juego.nivelO2W <= 0) 
         {
           juego.resultado = "DERROTA";
@@ -251,7 +729,8 @@ function draw()
           juego.frameDeFin = frameCount;
         }
 
-        //recién se fijó el resultado en este mismo frame: se guarda el puntaje una única vez (solo victorias)
+        /*recién se fijó el resultado en este mismo frame: se guarda el puntaje una única vez 
+        (solo victorias)*/
         if (juego.resultado == "VICTORIA") 
         {
           let segundosSobrevividos = floor(framesTranscurridos / 60);
@@ -260,9 +739,11 @@ function draw()
             segundosSobrevividos = 60;
           }
 
-          let porcentajeIntactaFinal = 100 - floor((juego.cantidadBloqueadas / juego.totalCeldasActivas) * 100);
+          let porcentajeIntactaFinal = 100 - floor((juego.cantidadBloqueadas / 
+          juego.totalCeldasActivas) * 100);
 
-          guardarPuntaje(segundosSobrevividos, juego.resultado, juego.nivelO2W, porcentajeIntactaFinal, juego.cantidadDesviados);
+          guardarPuntaje(segundosSobrevividos, juego.resultado, juego.nivelO2W, porcentajeIntactaFinal, 
+          juego.cantidadDesviados);
         }
       }
 
@@ -270,13 +751,15 @@ function draw()
       juego.dibujarMeteoritos();
       juego.astronauta.dibujar();
 
-      //HUD: tiempo como cronómetro, O2/W como batería (verde = vida, rojo = daño) e integridad 
-      //de la plataforma como círculo (gris claro = celdas intactas, gris oscuro = bloqueadas)
+
+      /*HUD: tiempo como cronómetro, O2/W como batería (verde = vida, rojo = daño) e integridad 
+      de la plataforma como círculo (gris claro = celdas intactas, gris oscuro = bloqueadas)*/
       push();
 
       //tiempo restante en formato M:SS
       let segundosSoloRestantes = segundosRestantes % 60;
-      let textoSegundos = segundosSoloRestantes < 10 ? "0" + segundosSoloRestantes : "" + segundosSoloRestantes;
+      let textoSegundos = segundosSoloRestantes < 10 ? "0" + segundosSoloRestantes : "" + 
+      segundosSoloRestantes;
       let textoTiempo = floor(segundosRestantes / 60) + ":" + textoSegundos;
 
       noStroke();
@@ -286,9 +769,11 @@ function draw()
       textSize(24);
       text(textoTiempo, 1225, 50);
 
-      //batería de O2/W: fondo rojo (daño) con relleno verde proporcional a lo que queda
-      let bateriaX = 1153;
-      let bateriaY = 86;
+      /*batería de O2/W: fondo rojo (daño) con relleno verde proporcional a lo que queda. bateriaX 
+      centrada con el círculo de plataforma (circuloX) y bateriaY afinada para quedar equidistante 
+      entre el cronómetro (arriba) y el círculo de plataforma (abajo)*/
+      let bateriaX = 1165;
+      let bateriaY = 92;
       let bateriaAncho = 72;
       let bateriaAlto = 24;
       let fraccionO2W = juego.nivelO2W / 90;
@@ -326,7 +811,8 @@ function draw()
       fill(210);
       if (fraccionIntacta > 0) 
       {
-        arc(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2, -HALF_PI, -HALF_PI + fraccionIntacta * TWO_PI, PIE);
+        arc(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2, -HALF_PI, -HALF_PI + 
+        fraccionIntacta * TWO_PI, PIE);
       }
 
       pop();
@@ -339,7 +825,8 @@ function draw()
           segundosJugados = 60;
         }
 
-        dibujarCuadro(juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + segundosJugados + " segundos.", 640, 327, 500, 230);
+        dibujarCuadro(juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + 
+        segundosJugados + " segundos.", 640, 327, 500, 230);
         dibujarBoton("JUGAR DE NUEVO", 640, 469, 320, 48, 0);
         dibujarBoton("INICIO", 640, 535, 320, 48, 0);
       }
@@ -352,6 +839,11 @@ function draw()
 //se llama una única vez por click (sirve para los botones del menú)
 function mousePressed()
 {
+  if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+  {
+    getAudioContext().resume();
+  }
+
   switch(estado) 
   {
     case ESTADO_MENU:
@@ -366,12 +858,13 @@ function mousePressed()
           getAudioContext().resume();
         }
 
-        if(musica.isPlaying())
+        if (musica.isPlaying())
         {
           musica.pause();
         }
         else
         {
+          musica.setLoop(true);
           musica.loop();
         }
       }
@@ -448,6 +941,15 @@ class Juego
     this.filas = [];
     this.generarFilas();
 
+    /*arrays reutilizables para obtenerCeldaActivaAlAzar() y obtenerCeldaGrisClaroAlAzar(): 
+    se vacían con .length = 0 y se llenan de nuevo sobre el mismo array. Se usan pares 
+    distintos para cada método porque obtenerCeldaGrisClaroAlAzar() puede llamarse en medio 
+    de un uso de obtenerCeldaActivaAlAzar() (agotarVerde) y no deben pisarse entre sí*/
+    this._cacheFilasActivas = [];
+    this._cacheColumnasActivas = [];
+    this._cacheFilasGrisClaro = [];
+    this._cacheColumnasGrisClaro = [];
+
     //frame en el que arranca la partida (se actualiza al presionar JUGAR)
     this.frameDeInicio = 0;
     //frame en el que termina la partida (se fija una única vez al haber resultado)
@@ -475,8 +977,10 @@ class Juego
     this.cantidadBloqueadas = 0;
     this.porcentajeColapso = 0.3;
 
-    //meteoritos: amenazas
-    this.meteoritos = [];
+    /*meteoritos: pool fijo de objetos reciclados (ver generarPoolMeteoritos), en vez de crear 
+    uno nuevo por cada aparición. Evita el picoteo de rendimiento por recolección de basura 
+    cuando se crean/descartan muchos objetos seguidos*/
+    this.generarPoolMeteoritos();
     //el ritmo de aparición arranca más tranquilo y se acelera hacia el final de la partida
     this.intervaloMeteoritoInicial = 46;
     this.intervaloMeteoritoFinal = 24;
@@ -512,14 +1016,14 @@ class Juego
         cantidadActivaEnEstaFila = 1;
       }
 
-      this.filas.push(new Fila(i, cantidadActivaEnEstaFila, this.cantidadColumnas, this.tamañoBloque, this.centroXPlataforma, this.centroYPlataforma));
+      this.filas.push(new Fila(i, cantidadActivaEnEstaFila, this.cantidadColumnas, this.tamañoBloque, 
+      this.centroXPlataforma, this.centroYPlataforma));
     }
 
     this.garantizarVerde();
   }
 
-  /*método: si ningún bloque salió verde al azar, fuerza uno para que siempre haya 
-  al menos uno*/
+  //método: si ningún bloque salió verde al azar, fuerza uno para que siempre haya al menos uno
   garantizarVerde() 
   {
     let hayVerde = false;
@@ -550,6 +1054,13 @@ class Juego
   //método: reinicia el estado de una partida nueva (sin recrear todo el objeto Juego)
   reiniciar() 
   {
+    if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+    {
+      getAudioContext().resume();
+    }
+
+    frameUltimoSonidoMeteorito = -10;
+
     this.generarFilas();
     this.nivelO2W = 90;
     this.resultado = "";
@@ -557,20 +1068,41 @@ class Juego
     this.frameDeFin = 0;
     this.totalCeldasActivas = this.contarCeldasActivas();
     this.cantidadBloqueadas = 0;
-    this.meteoritos = [];
+    this.generarPoolMeteoritos();
     this.frameUltimoMeteorito = 0;
     this.proximoFrameDisparo = 0;
     this.cantidadDesviados = 0;
     this.astronauta = new Astronauta(floor(this.cantidadColumnas / 2), this);
   }
 
-  //método: dibuja todas las filas de la plataforma
+  /*método: crea de una vez un lote fijo de meteoritos "apagados" (activo: false), muy por 
+  encima del pico real de meteoritos simultáneos (~8-10), para tener margen de sobra. Se 
+  reutilizan durante toda la partida en vez de crear/descartar objetos nuevos todo el tiempo*/
+  generarPoolMeteoritos() 
+  {
+    this.meteoritos = [];
+
+    for (let i = 0; i < 45; i = i + 1) 
+    {
+      this.meteoritos.push(new Meteorito());
+    }
+  }
+
+  /*método: dibuja todas las filas de la plataforma. stroke/strokeWeight/rectMode se fijan acá 
+  una sola vez para toda la plataforma*/
   dibujarPlataforma() 
   {
+    push();
+    stroke(0);
+    strokeWeight(2);
+    rectMode(CENTER);
+
     for (let i = 0; i < this.filas.length; i = i + 1) 
     {
       this.filas[i].dibujar();
     }
+
+    pop();
   }
 
   //método: devuelve el número de fila (superficie) más alto activo para una columna dada
@@ -675,8 +1207,10 @@ class Juego
   devuelve un array de 2 elementos: [fila, columna]*/
   obtenerCeldaActivaAlAzar() 
   {
-    let filasActivas = [];
-    let columnasActivas = [];
+    let filasActivas = this._cacheFilasActivas;
+    let columnasActivas = this._cacheColumnasActivas;
+    filasActivas.length = 0;
+    columnasActivas.length = 0;
 
     for (let i = 0; i < this.filas.length; i = i + 1) 
     {
@@ -727,14 +1261,17 @@ class Juego
   [-1, -1] si no queda ninguna disponible*/
   obtenerCeldaGrisClaroAlAzar(filaExcluida_, columnaExcluida_) 
   {
-    let filasCandidatas = [];
-    let columnasCandidatas = [];
+    let filasCandidatas = this._cacheFilasGrisClaro;
+    let columnasCandidatas = this._cacheColumnasGrisClaro;
+    filasCandidatas.length = 0;
+    columnasCandidatas.length = 0;
 
     for (let i = 0; i < this.filas.length; i = i + 1) 
     {
       for (let columna = 0; columna < this.cantidadColumnas; columna = columna + 1) 
       {
-        let esLaMismaCelda = (this.filas[i].numeroDeFila == filaExcluida_ && columna == columnaExcluida_);
+        let esLaMismaCelda = (this.filas[i].numeroDeFila == filaExcluida_ && 
+        columna == columnaExcluida_);
 
         if (this.filas[i].bloques[columna] == TIPO_GRIS_CLARO && esLaMismaCelda == false) 
         {
@@ -780,13 +1317,18 @@ class Juego
   actualizarMeteoritos(framesTranscurridos_) 
   {
     let progresoPartida = constrain(framesTranscurridos_ / (60 * 60), 0, 1);
-    let intervaloActual = lerp(this.intervaloMeteoritoInicial, this.intervaloMeteoritoFinal, progresoPartida);
+    let intervaloActual = lerp(this.intervaloMeteoritoInicial, this.intervaloMeteoritoFinal, 
+    progresoPartida);
 
     if (framesTranscurridos_ - this.frameUltimoMeteorito >= intervaloActual) 
     {
-      let nuevoMeteorito = new Meteorito();
-      nuevoMeteorito.generar(this);
-      this.meteoritos.push(nuevoMeteorito);
+      let meteoritoReciclado = this.buscarMeteoritoLibre();
+
+      if (meteoritoReciclado != null) 
+      {
+        meteoritoReciclado.generar(this);
+      }
+
       this.frameUltimoMeteorito = framesTranscurridos_;
     }
 
@@ -796,7 +1338,25 @@ class Juego
     }
   }
 
-  //método: dibuja todos los meteoritos (activos o en animación de explosión)
+  /*método: busca en el pool un meteorito que no esté activo ni explotando (disponible para 
+  reciclar). Si el pool estuviera lleno de meteoritos ocupados, devuelve null y esa aparición 
+  puntual se salta (con 45 de margen sobre un pico real de ~8-10, no debería pasar nunca)*/
+  buscarMeteoritoLibre() 
+  {
+    for (let i = 0; i < this.meteoritos.length; i = i + 1) 
+    {
+      if (this.meteoritos[i].activo == false && this.meteoritos[i].explotando == false) 
+      {
+        return this.meteoritos[i];
+      }
+    }
+
+    return null;
+  }
+
+  /*método: dibuja todos los meteoritos (activos o en animación de explosión). Los que están 
+  apagados y sin explotar se quedan en el array sin hacer nada, esperando ser reciclados por 
+  buscarMeteoritoLibre() — ya no se podan ni se vuelven a crear*/
   dibujarMeteoritos() 
   {
     for (let i = 0; i < this.meteoritos.length; i = i + 1) 
@@ -805,8 +1365,7 @@ class Juego
     }
   }
 
-  /*método: mientras se mantenga presionado el click izquierdo, 
-  dispara contra el meteorito en ráfaga*/
+  //método: mientras se mantenga presionado el click izquierdo, dispara contra el meteorito en ráfaga
   actualizarDisparo() 
   {
     if (mouseIsPressed == false) 
@@ -889,21 +1448,19 @@ class Fila
   //método: dibuja esta fila
   dibujar() 
   {
-    //bucle de recorrido: recorre las columnas ya construidas y dibuja cada bloque activo
+    /*bucle de recorrido: recorre las columnas ya construidas y dibuja cada bloque activo. 
+    stroke/strokeWeight/rectMode ya vienen fijados una sola vez desde dibujarPlataforma(), 
+    así que acá solo se cambia el fill (que sí varía por bloque) y se dibuja el rect*/
     for (let columna = 0; columna < this.cantidadColumnas; columna = columna + 1) 
     {
       if (this.bloques[columna] != TIPO_VACIO) 
       {
-        let posX = this.centroX - (this.cantidadColumnas * this.tamañoBloque) / 2 + (columna + 0.5) * this.tamañoBloque;
+        let posX = this.centroX - (this.cantidadColumnas * this.tamañoBloque) / 2 + 
+        (columna + 0.5) * this.tamañoBloque;
         let posY = this.centroY - this.tamañoBloque / 2 - (this.numeroDeFila - 1) * this.tamañoBloque;
 
-        push();
         fill(colorDeTipo(this.bloques[columna]));
-        stroke(0);
-        strokeWeight(2);
-        rectMode(CENTER);
         rect(posX, posY, this.tamañoBloque, this.tamañoBloque);
-        pop();
       }
     }
   }
@@ -1000,11 +1557,13 @@ class Astronauta
 
     if (columnaDeseada < columnaInicioFila) 
     {
-      columnaDeseada = juego_.buscarColumnaLibreDesdeExtremo(filaDeseada, columnaInicioFila, columnaFinFila, true);
+      columnaDeseada = juego_.buscarColumnaLibreDesdeExtremo(filaDeseada, columnaInicioFila, 
+      columnaFinFila, true);
     }
     if (columnaDeseada >= columnaFinFila) 
     {
-      columnaDeseada = juego_.buscarColumnaLibreDesdeExtremo(filaDeseada, columnaInicioFila, columnaFinFila, false);
+      columnaDeseada = juego_.buscarColumnaLibreDesdeExtremo(filaDeseada, columnaInicioFila, 
+      columnaFinFila, false);
     }
 
     //toda la fila está bloqueada: no hay donde reaparecer, no se mueve
@@ -1027,7 +1586,9 @@ class Astronauta
   //método: calcula su posición en pantalla según su fila y columna actuales
   posicionarse(juego_) 
   {
-    this.x = juego_.centroXPlataforma - (juego_.cantidadColumnas * juego_.tamañoBloque) / 2 + (this.columna + 0.5) * juego_.tamañoBloque;
+    this.x = juego_.centroXPlataforma - (juego_.cantidadColumnas * juego_.tamañoBloque) / 2 + 
+    (this.columna + 0.5) * juego_.tamañoBloque;
+
     this.y = juego_.centroYPlataforma - this.fila * juego_.tamañoBloque;
   }
 
@@ -1075,7 +1636,8 @@ class Astronauta
         }
       }
 
-      //Rover queda atrapado un tiempo limitado; después se libera y puede volver a moverse como Astronauta
+      /*Rover queda atrapado un tiempo limitado; después se libera y puede volver a moverse como
+      Astronauta*/
       if (this.atrapado == true && this.framesQuieto >= juego_.duracionAtrapadoFrames) 
       {
         this.atrapado = false;
@@ -1139,8 +1701,7 @@ class Meteorito
     this.velocidadY = 3;
     this.radio = 14;
 
-    /*rastro: dos arrays paralelos con las posiciones anteriores (en vez de un array de 
-    objetos)*/
+    //rastro: dos arrays paralelos con las posiciones anteriores (en vez de un array de objetos)
     this.rastroX = [];
     this.rastroY = [];
     this.largoRastro = 8;
@@ -1161,12 +1722,15 @@ class Meteorito
     this.filaObjetivo = celda[0];
     this.columnaObjetivo = celda[1];
 
-    this.x = juego_.centroXPlataforma - (juego_.cantidadColumnas * juego_.tamañoBloque) / 2 + (this.columnaObjetivo + 0.5) * juego_.tamañoBloque;
+    this.x = juego_.centroXPlataforma - (juego_.cantidadColumnas * juego_.tamañoBloque) / 2 + 
+    (this.columnaObjetivo + 0.5) * juego_.tamañoBloque;
+
     this.y = -20;
     this.yObjetivo = juego_.centroYPlataforma - this.filaObjetivo * juego_.tamañoBloque;
 
-    this.rastroX = [];
-    this.rastroY = [];
+    //vacía el rastro reutilizando el mismo array (en vez de crear uno nuevo cada vez)
+    this.rastroX.length = 0;
+    this.rastroY.length = 0;
   }
 
   //método: hace descender el meteorito y detecta el impacto contra su celda objetivo
@@ -1181,8 +1745,8 @@ class Meteorito
     this.rastroY.push(this.y);
     if (this.rastroX.length > this.largoRastro) 
     {
-      this.rastroX.splice(0, 1);
-      this.rastroY.splice(0, 1);
+      this.rastroX.shift();
+      this.rastroY.shift();
     }
 
     this.y = this.y + this.velocidadY;
@@ -1201,11 +1765,13 @@ class Meteorito
     this.explotando = true;
     this.frameDeExplosion = frameCount;
 
-    let panorama = map(this.x, 0, 1280, -1, 1);
+    let panorama = constrain(map(this.x, 0, 1280, -1, 1), -1, 1);
 
-    if (this.columnaObjetivo == juego_.astronauta.columna && this.filaObjetivo == juego_.astronauta.fila) 
+    if (this.columnaObjetivo == juego_.astronauta.columna && this.filaObjetivo == 
+    juego_.astronauta.fila) 
     {
-      muerteSer.pan(panorama);
+      muerteSer.pan(panorama, 0.05);
+      muerteSer.stop();
       muerteSer.play();
       juego_.resultado = "DERROTA";
       juego_.detalleResultado = "Un meteorito te impactó directamente.";
@@ -1213,8 +1779,12 @@ class Meteorito
     } 
     else 
     {
-      meteorito.pan(panorama);
-      meteorito.play();
+      if (frameCount - frameUltimoSonidoMeteorito >= 4) 
+      {
+        meteorito.pan(panorama, 0.05);
+        meteorito.play();
+        frameUltimoSonidoMeteorito = frameCount;
+      }
       juego_.marcarBloqueado(this.filaObjetivo, this.columnaObjetivo);
     }
   }
@@ -1226,8 +1796,8 @@ class Meteorito
     this.explotando = true;
     this.frameDeExplosion = frameCount;
 
-    let panorama = map(this.x, 0, 1280, -1, 1);
-    interceptar.pan(panorama);
+    let panorama = constrain(map(this.x, 0, 1280, -1, 1), -1, 1);
+    interceptar.pan(panorama, 0.05);
     interceptar.play();
   }
 
@@ -1239,12 +1809,19 @@ class Meteorito
       push();
       noStroke();
 
+      /*el alfa de cada segmento del rastro depende de su posición en la cola y cambia todo 
+      el tiempo, así que se dibuja directo con el contexto nativo (mismo criterio que 
+      estrellas/nebulosa) para no alocar un p5.Color nuevo por segmento y por frame*/
+      drawingContext.fillStyle = "rgb(255, 170, 60)";
       for (let i = 0; i < this.rastroX.length; i = i + 1) 
       {
         let alfa = map(i, 0, this.rastroX.length, 20, 140);
-        fill(255, 170, 60, alfa);
-        circle(this.rastroX[i], this.rastroY[i], this.radio * 0.6);
+        drawingContext.globalAlpha = alfa / 255;
+        drawingContext.beginPath();
+        drawingContext.arc(this.rastroX[i], this.rastroY[i], this.radio * 0.3, 0, TWO_PI);
+        drawingContext.fill();
       }
+      drawingContext.globalAlpha = 1;
 
       fill(255, 170, 60);
       circle(this.x, this.y, this.radio);
@@ -1310,7 +1887,7 @@ class Satelite
   }
 }
 
-//cruza una sola vez, aproximadamente a mitad de partida y anuncia el recrudecimiento de meteoritos
+//cruza una sola vez, aproximadamente a mitad de partida y anuncia el aumento de meteoritos
 class Sonda
 {
   constructor() 
@@ -1354,27 +1931,34 @@ class Sonda
 
 //Funciones auxiliares
 
-//devuelve el color de relleno según el tipo de bloque
+/*cache de los colores de cada tipo de bloque: se crean una única vez (acá abajo), en vez de 
+instanciar un p5.Color nuevo por bloque en cada frame dentro de colorDeTipo()*/
+let coloresBloques = {};
+
+function inicializarColoresBloques() 
+{
+  coloresBloques[TIPO_ROJO] = color(200, 70, 50);
+  coloresBloques[TIPO_VERDE] = color(70, 180, 100);
+  coloresBloques[TIPO_GRIS_CLARO] = color(210, 210, 218);
+  coloresBloques[TIPO_GRIS_OSCURO] = color(55, 50, 48);
+  coloresBloques[TIPO_VACIO] = color(0, 0, 0, 0);
+}
+
+/*cache de los colores por defecto de los botones: se crean una única vez para no 
+instanciar un p5.Color nuevo por botón en cada frame dentro de dibujarBoton()*/
+let colorNegroBoton;
+let colorBlancoBoton;
+
+function inicializarColoresBotones() 
+{
+  colorNegroBoton = color(0);
+  colorBlancoBoton = color(255);
+}
+
+//devuelve el color de relleno según el tipo de bloque (cacheado, ver inicializarColoresBloques)
 function colorDeTipo(tipo_) 
 {
-  if (tipo_ == TIPO_ROJO) 
-  {
-    return color(200, 70, 50);
-  }
-  if (tipo_ == TIPO_VERDE) 
-  {
-    return color(70, 180, 100);
-  }
-  if (tipo_ == TIPO_GRIS_CLARO) 
-  {
-    return color(210, 210, 218);
-  }
-  if (tipo_ == TIPO_GRIS_OSCURO) 
-  {
-    return color(55, 50, 48);
-  }
-
-  return color(0, 0, 0, 0);
+  return coloresBloques[tipo_];
 }
 
 /*dibuja un botón rectangular centrado en x_, y_. colorFondo_ y colorTexto_ son opcionales: 
@@ -1383,11 +1967,11 @@ function dibujarBoton(txt_, x_, y_, ancho_, alto_, colorFondo_, colorTexto_)
 {
   if (colorFondo_ == undefined) 
   {
-    colorFondo_ = color(0);
+    colorFondo_ = colorNegroBoton;
   }
   if (colorTexto_ == undefined) 
   {
-    colorTexto_ = color(255);
+    colorTexto_ = colorBlancoBoton;
   }
 
   push();
@@ -1435,7 +2019,7 @@ function dibujarToggle(icono_, x_, y_, tamaño_)
   push();
   translate(x_, y_);
 
-  if(mouseOverRect(x_, y_, tamaño_, tamaño_)) 
+  if (mouseOverRect(x_, y_, tamaño_, tamaño_)) 
   {
     scale(1.1);
   }
@@ -1452,13 +2036,13 @@ function mouseOverRect(x_centro_, y_centro_, ancho_, alto_)
   mouseY > y_centro_-alto_/2 && mouseY < y_centro_+alto_/2);
 }
 
-/*cuadro de INSTRUCCIONES: a diferencia de dibujarCuadro() (que centra todo el bloque de texto), 
-acá cada oración lleva su propio ícono a la izquierda y el texto alineado a la izquierda. El 
-"alto" de cada oración es el espacio vertical que ocupa (más grande en la primera porque es 
-la única que ocupa dos líneas)*/
-function dibujarCuadroInstrucciones() 
+//lista de oraciones con íconos e instrucciones, inicializada una sola vez en setup()
+let listaInstrucciones = [];
+
+function inicializarInstrucciones() 
 {
-  let instrucciones = [
+  listaInstrucciones = 
+  [
     { icono: astroIcono, texto: "Usá las flechas del teclado para mover al Astronauta.", alto: 44 },
     { icono: miraIcono, texto: "Usá el mouse para mover la mira y disparar (mantené click para ráfaga).", alto: 44 },
     { icono: alertaIcono, texto: "Evitá pisar los bloques rojos y grises: te van a costar O2/W.", alto: 44 },
@@ -1466,7 +2050,14 @@ function dibujarCuadroInstrucciones()
     { icono: meteoritoIcono, texto: "Los meteoritos son letales si te tocan y peligrosos para la plataforma.", alto: 44 },
     { icono: relojIcono, texto: "Sobreviví 60 segundos con O2/W mayor a cero.", alto: 44 }
   ];
+}
 
+/*cuadro de INSTRUCCIONES: a diferencia de dibujarCuadro() (que centra todo el bloque de texto), 
+acá cada oración lleva su propio ícono a la izquierda y el texto alineado a la izquierda. El 
+"alto" de cada oración es el espacio vertical que ocupa (más grande en la primera porque es 
+la única que ocupa dos líneas)*/
+function dibujarCuadroInstrucciones() 
+{
   let ancho = 920;
   let alto = 300;
 
@@ -1477,8 +2068,8 @@ function dibujarCuadroInstrucciones()
   strokeWeight(1);
   rectMode(CENTER);
   rect(0, 0, ancho, alto, 6);
-  //vuelve a CORNER: text() con ancho también usa el rectMode vigente, y con CENTER
-  //tomaba xTexto como el centro de la caja de texto en vez de como borde izquierdo
+  /*vuelve a CORNER: text() con ancho también usa el rectMode vigente, y con CENTER
+  tomaba xTexto como el centro de la caja de texto en vez de como borde izquierdo*/
   rectMode(CORNER);
 
   let tamañoIcono = 32;
@@ -1494,11 +2085,11 @@ function dibujarCuadroInstrucciones()
   textLeading(34);
   imageMode(CORNER);
 
-  for (let i = 0; i < instrucciones.length; i = i + 1) 
+  for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
   {
-    image(instrucciones[i].icono, xIcono, yCursor, tamañoIcono, tamañoIcono);
-    text(instrucciones[i].texto, xTexto, yCursor, anchoTexto);
-    yCursor = yCursor + instrucciones[i].alto;
+    image(listaInstrucciones[i].icono, xIcono, yCursor, tamañoIcono, tamañoIcono);
+    text(listaInstrucciones[i].texto, xTexto, yCursor, anchoTexto);
+    yCursor = yCursor + listaInstrucciones[i].alto;
   }
   pop();
 }
@@ -1550,7 +2141,8 @@ function chequearClick(x_, y_, ancho_, alto_, estadoDestino_)
 
 /*guarda un puntaje nuevo (resultado, segundos sobrevividos, O2/W final, % de plataforma intacta y 
 cantidad de meteoritos desviados) en localStorage: si ya existe un registro idéntico no lo duplica, 
-ordena por segundos (con O2/W y plataforma como desempate) de mayor a menor y conserva solo los 3 mejores*/
+ordena por segundos (con O2/W y plataforma como desempate) de mayor a menor y conserva solo los 
+3 mejores*/
 function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_) 
 {
   let lista = obtenerPuntajes();
@@ -1562,9 +2154,7 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     if (lista[i].segundos == segundos_ && lista[i].resultado == resultado_ && 
     lista[i].nivelO2W == nivelO2W_ && lista[i].porcentajePlataforma == porcentajePlataforma_ &&
     lista[i].cantidadDesviados == cantidadDesviados_) 
-    {
-      yaExiste = true;
-    }
+    {yaExiste = true;}
   }
 
   if (yaExiste) 
@@ -1572,7 +2162,8 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     return;
   }
 
-  lista.push({
+  lista.push
+  ({
     segundos: segundos_,
     resultado: resultado_,
     nivelO2W: nivelO2W_,
@@ -1580,7 +2171,8 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     cantidadDesviados: cantidadDesviados_
   });
 
-  //orden principal por el promedio de O2/W, % de plataforma y meteoritos desviados; empatado, desempata segundos
+  /*orden principal por el promedio de O2/W, % de plataforma y meteoritos desviados; empatado, 
+  desempata segundos*/
   lista.sort(function(a_, b_) 
   {
     let promedioA = (a_.nivelO2W + a_.porcentajePlataforma + a_.cantidadDesviados) / 3;
@@ -1598,7 +2190,8 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
   localStorage.setItem(CLAVE_PUNTAJES, JSON.stringify(lista));
 }
 
-//lee la lista de puntajes guardados en este navegador (array vacío si no hay nada o el dato está corrupto)
+/*lee la lista de puntajes guardados en este navegador (array vacío si no hay nada o 
+el dato está corrupto)*/
 function obtenerPuntajes() 
 {
   let datos = localStorage.getItem(CLAVE_PUNTAJES);
@@ -1616,12 +2209,14 @@ function obtenerPuntajes()
       return [];
     }
 
-    //normaliza puntajes guardados antes de sumar resultado, O2/W y plataforma (venían como número suelto)
+    /*normaliza puntajes guardados antes de sumar resultado, O2/W y plataforma 
+    (venían como número suelto)*/
     for (let i = 0; i < lista.length; i = i + 1) 
     {
       if (typeof lista[i] == "number") 
       {
-        lista[i] = {
+        lista[i] = 
+        {
           segundos: lista[i],
           resultado: "",
           nivelO2W: null,
