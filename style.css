@@ -17,3 +17,8 @@ canvas
   margin: auto;
   object-fit: contain;
 }
+
+p
+{
+  margin: 1rem;
+}

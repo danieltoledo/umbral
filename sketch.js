@@ -34,6 +34,15 @@ let estrellas = [];
 //control para evitar saturar el motor de audio con impactos de meteoritos casi simultáneos
 let frameUltimoSonidoMeteorito = -10;
 
+//control para el efecto de interferencia en la música cuando el astronauta está atrapado
+let interferenciaActiva = false;
+let frameUltimoCorteInterferencia = 0;
+
+//control para el efecto visual del disparo
+let disparoX = 0;
+let disparoY = 0;
+let frameDisparo = 0;
+
 /*Control de teclado propio (no depende de keyIsDown de p5): se registra en fase de
 captura sobre window, así el preventDefault llega antes que cualquier otro manejador
 de la página que pudiera estar comiéndose el evento.*/
@@ -166,21 +175,21 @@ function preload()
   fuenteBoton = loadFont("assets/Montserrat-Medium.ttf");
   fuenteCuadro = loadFont("assets/Montserrat-Regular.ttf");
 
-  alertaIcono = loadImage("assets/alerta.png");
-  astroIcono = loadImage("assets/astronauta.png");
-  meteoritoIcono = loadImage("assets/meteorito.png");
-  musicaEncenderIcono = loadImage("assets/musica-encender.png");
-  musicaApagarIcono = loadImage("assets/musica-apagar.png");
-  pantallaCompletaIcono = loadImage("assets/pantalla-completa.png");
-  pantallaIncompletaIcono = loadImage("assets/pantalla-incompleta.png");
-  relojIcono = loadImage("assets/reloj.png");
-  saludIcono = loadImage("assets/salud.png");
-  miraIcono = loadImage("assets/telescopio.png");
+  alertaIcono = loadImage("assets/alerta.png", "Ícono de un triángulo con signo de exclamación");
+  astroIcono = loadImage("assets/astronauta.png", "Ícono del casco de un Astronauta con visor");
+  meteoritoIcono = loadImage("assets/meteorito.png", "Ícono de un asteroide simple");
+  musicaEncenderIcono = loadImage("assets/musica-encender.png", "Ícono de una nota musical");
+  musicaApagarIcono = loadImage("assets/musica-apagar.png", "Ícono de una nota musical tachada");
+  pantallaCompletaIcono = loadImage("assets/pantalla-completa.png", "Ícono de 4 flechas apuntando hacia el exterior");
+  pantallaIncompletaIcono = loadImage("assets/pantalla-incompleta.png", "Ícono de 4 flechas apuntando hacia el interior");
+  relojIcono = loadImage("assets/reloj.png", "Ícono de un reloj con botón superior");
+  saludIcono = loadImage("assets/salud.png", "Ícono de un círculo con un signo más");
+  miraIcono = loadImage("assets/telescopio.png", "Ícono de un telescopio con vista lateral");
 }
 
 function setup() 
 {
-  lienzo = createCanvas(1280, 720);
+  lienzo = createCanvas(1280, 720).parent('contenedorCanva');
   noCursor();
 
   inicializarColoresBloques();
@@ -600,6 +609,38 @@ function draw()
     }
   }
 
+  //efecto de interferencia en la música cuando el astronauta está atrapado (rover)
+  if (interferenciaActiva == true && musica.isPlaying() == true) 
+  {
+    //entrecortado drástico simulando pérdida de señal sin usar pause/play
+    if (frameCount - frameUltimoCorteInterferencia > random(3, 8)) 
+    {
+      //corte completo momentáneo (volumen 0)
+      musica.amp(0.0, 0.01);
+      frameUltimoCorteInterferencia = frameCount;
+    }
+    else if (frameCount - frameUltimoCorteInterferencia == 1) 
+    {
+      //reanudación con volumen muy bajo
+      musica.amp(random(0.05, 0.15), 0.01);
+    }
+    else if (frameCount - frameUltimoCorteInterferencia == 2) 
+    {
+      //volumen medio-bajo
+      musica.amp(random(0.1, 0.2), 0.01);
+    }
+    else 
+    {
+      //recuperación parcial con variación
+      musica.amp(random(0.15, 0.3), 0.01);
+    }
+  } 
+  else if (interferenciaActiva == false && musica.isPlaying() == true) 
+  {
+    //restaurar volumen normal cuando no hay interferencia
+    musica.amp(0.3, 0.2);
+  }
+
   switch(estado) 
   {
     case ESTADO_MENU:
@@ -716,17 +757,20 @@ function draw()
           juego.resultado = "DERROTA";
           juego.detalleResultado = "Te quedaste sin O2/W.";
           juego.frameDeFin = frameCount;
+          interferenciaActiva = false;
         }
         else if (juego.cantidadBloqueadas >= juego.totalCeldasActivas * juego.porcentajeColapso) 
         {
           juego.resultado = "DERROTA";
           juego.detalleResultado = "La plataforma colapsó.";
           juego.frameDeFin = frameCount;
+          interferenciaActiva = false;
         }
         else if (segundosRestantes <= 0) 
         {
           juego.resultado = "VICTORIA";
           juego.frameDeFin = frameCount;
+          interferenciaActiva = false;
         }
 
         /*recién se fijó el resultado en este mismo frame: se guarda el puntaje una única vez 
@@ -748,8 +792,8 @@ function draw()
       }
 
       juego.dibujarPlataforma();
-      juego.dibujarMeteoritos();
       juego.astronauta.dibujar();
+      juego.dibujarMeteoritos();
 
 
       /*HUD: tiempo como cronómetro, O2/W como batería (verde = vida, rojo = daño) e integridad 
@@ -817,6 +861,17 @@ function draw()
 
       pop();
 
+      //efecto visual del disparo
+      if (frameCount - frameDisparo < 8) 
+      {
+        push();
+        noFill();
+        stroke(255, 120, 60, map(frameCount - frameDisparo, 0, 8, 255, 0));
+        strokeWeight(2);
+        circle(disparoX, disparoY, (frameCount - frameDisparo) * 6);
+        pop();
+      }
+
       if (juego.resultado != "") 
       {
         let segundosJugados = floor(framesTranscurridos / 60);
@@ -866,6 +921,8 @@ function mousePressed()
         {
           musica.setLoop(true);
           musica.loop();
+          //asegurar volumen normal al reanudar
+          musica.amp(0.3, 0.1);
         }
       }
 
@@ -916,7 +973,15 @@ function mousePressed()
           juego.reiniciar();
           estado = ESTADO_JUEGO;
         }
-        chequearClick(640, 535, 320, 48, ESTADO_MENU);
+        if(mouseOverRect(640, 535, 320, 48))
+        {
+          interferenciaActiva = false;
+          if (musica.isPlaying() == true) 
+          {
+            musica.amp(0.3, 0.1);
+          }
+          estado = ESTADO_MENU;
+        }
       }
     break;
   }
@@ -1060,6 +1125,13 @@ class Juego
     }
 
     frameUltimoSonidoMeteorito = -10;
+    interferenciaActiva = false;
+    frameUltimoCorteInterferencia = 0;
+
+    if (musica.isPlaying() == true) 
+    {
+      musica.amp(0.3, 0.1);
+    }
 
     this.generarFilas();
     this.nivelO2W = 90;
@@ -1386,6 +1458,9 @@ class Juego
       {
         m.interceptar();
         this.cantidadDesviados = this.cantidadDesviados + 1;
+        disparoX = m.x;
+        disparoY = m.y;
+        frameDisparo = frameCount;
         this.proximoFrameDisparo = frameCount + this.cooldownDisparo;
         break;
       }
@@ -1607,6 +1682,7 @@ class Astronauta
       if (tipoActual == TIPO_ROJO) 
       {
         this.atrapado = true;
+        interferenciaActiva = true;
       }
 
       this.framesQuieto = 0;
@@ -1641,6 +1717,7 @@ class Astronauta
       if (this.atrapado == true && this.framesQuieto >= juego_.duracionAtrapadoFrames) 
       {
         this.atrapado = false;
+        interferenciaActiva = false;
         this.framesQuieto = 0;
         this.columnaAnterior = this.columna;
         this.filaAnterior = this.fila;
@@ -1665,23 +1742,23 @@ class Astronauta
       //Rover
       fill(200);
       rectMode(CENTER);
-      rect(0, 8, 46, 22, 2);
+      rect(0, 8, 58, 28, 2);
       fill(60);
-      circle(-18, 21, 12);
-      circle(0, 21, 12);
-      circle(18, 21, 12);
+      circle(-23, 26, 15);
+      circle(0, 26, 15);
+      circle(23, 26, 15);
       fill(200);
-      rect(0, -15, 15, 15, 2);
+      rect(0, -19, 19, 19, 2);
     } 
     else 
     {
       //Astronauta
       fill(255);
       rectMode(CENTER);
-      rect(0, 16, 22, 34, 3);
-      circle(0, -12, 30);
+      rect(0, 16, 28, 43, 3);
+      circle(0, -12, 38);
       fill(0);
-      circle(0, -12, 15);
+      circle(0, -12, 19);
     }
 
     pop();
@@ -1699,7 +1776,7 @@ class Meteorito
     this.x = 0;
     this.y = 0;
     this.velocidadY = 3;
-    this.radio = 14;
+    this.radio = 22;
 
     //rastro: dos arrays paralelos con las posiciones anteriores (en vez de un array de objetos)
     this.rastroX = [];
@@ -1776,6 +1853,10 @@ class Meteorito
       juego_.resultado = "DERROTA";
       juego_.detalleResultado = "Un meteorito te impactó directamente.";
       juego_.frameDeFin = frameCount;
+      if (musica.isPlaying() == true) 
+      {
+        musica.amp(0.05, 0.05);
+      }
     } 
     else 
     {
@@ -1825,6 +1906,8 @@ class Meteorito
 
       fill(255, 170, 60);
       circle(this.x, this.y, this.radio);
+      fill(200, 120, 40);
+      circle(this.x - 4, this.y - 3, this.radio * 0.3);
       pop();
     }
 
@@ -2088,6 +2171,7 @@ function dibujarCuadroInstrucciones()
   for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
   {
     image(listaInstrucciones[i].icono, xIcono, yCursor, tamañoIcono, tamañoIcono);
+    describe(listaInstrucciones[i].icono.description);
     text(listaInstrucciones[i].texto, xTexto, yCursor, anchoTexto);
     yCursor = yCursor + listaInstrucciones[i].alto;
   }
@@ -2120,13 +2204,13 @@ function dibujaPuntero()
 {
   push();
   noFill();
-  stroke(0, 220, 255, 220);
-  strokeWeight(2);
-  ellipse(mouseX, mouseY, 30, 30);
+  stroke(255, 100, 50, 220);
+  strokeWeight(3);
+  ellipse(mouseX, mouseY, 40, 40);
 
   noStroke();
-  fill(0, 220, 255, 230);
-  ellipse(mouseX, mouseY, 10, 10);
+  fill(255, 120, 60, 230);
+  ellipse(mouseX, mouseY, 14, 14);
   pop();
 }
 
