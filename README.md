@@ -10,11 +10,11 @@ Proyecto orientado al diseño y desarrollo de un minijuego que representa la cap
 - CSS
 - JavaScript
 - p5.js
-- IA
+- Herramientas de IA
 
 ## Características
 - Efectos audiovisuales e interactivos
-- Integración de contenido multimedia generativo
+- Integración de contenido generativo
 
 ## Autoría
 Daniel Toledo
