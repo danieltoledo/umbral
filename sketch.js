@@ -25,7 +25,10 @@ let lienzo;
 //Variables para cargar los archivos:
 let musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, 
 meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, 
-relojIcono, saludIcono, miraIcono;
+relojIcono, saludIcono, miraIcono, monedaIcono;
+
+//recompensa en moneda (ASTRO$) según el puesto obtenido: primero, segundo y tercero
+let RECOMPENSAS_PUESTO = [100, 60, 30];
 
 //estrellas del fondo procedural, generadas una sola vez en setup()
 let estrellas = [];
@@ -185,6 +188,7 @@ function preload()
   relojIcono = loadImage("assets/reloj.png", "Ícono de un reloj con botón superior");
   saludIcono = loadImage("assets/salud.png", "Ícono de un círculo con un signo más");
   miraIcono = loadImage("assets/telescopio.png", "Ícono de un telescopio con vista lateral");
+  monedaIcono = loadImage("assets/moneda.png", "Ícono de una moneda de astros");
 }
 
 function setup() 
@@ -689,29 +693,37 @@ function draw()
 
       //arma el texto con los 3 mejores puntajes guardados en este navegador ("—" si falta alguno)
       let listaPuntajes = obtenerPuntajes();
-      let textoPuntajes = "MEJORES PUNTAJES\n\n";
+      let textoPuntajes = "MEJORES PUNTAJES\n";
+
+      //texto de cada puesto por separado, para ubicar el ícono de moneda al final de cada línea
+      let lineasPuntajes = ["", "", ""];
 
       for (let i = 0; i < 3; i = i + 1) 
       {
         let datoPuntaje = listaPuntajes[i];
-        textoPuntajes = textoPuntajes + (i + 1) + ". ";
+        lineasPuntajes[i] = (i + 1) + ". ";
 
         if (datoPuntaje == undefined) 
         {
-          textoPuntajes = textoPuntajes + "—";
+          lineasPuntajes[i] = lineasPuntajes[i] + "—";
         } 
         else if (datoPuntaje.resultado == "") 
         {
           //puntaje viejo, normalizado en obtenerPuntajes() pero sin resultado/O2/W/plataforma
-          textoPuntajes = textoPuntajes + datoPuntaje.segundos + " segundos";
+          lineasPuntajes[i] = lineasPuntajes[i] + datoPuntaje.segundos + " segundos";
         } 
         else 
         {
           /*no se muestran los segundos: esta pantalla solo lista el top 3, que en la práctica son 
-          victorias*/
-          textoPuntajes = textoPuntajes + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + 
-          datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados;
+          victorias. Al final va el promedio y los ASTRO$ que corresponden a ese puesto*/
+          let promedioPuntaje = round((datoPuntaje.nivelO2W + datoPuntaje.porcentajePlataforma + 
+          datoPuntaje.cantidadDesviados) / 3);
+          lineasPuntajes[i] = lineasPuntajes[i] + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + 
+          datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados + 
+          " · Promedio " + promedioPuntaje + " · " + RECOMPENSAS_PUESTO[i] + " ASTRO$";
         }
+
+        textoPuntajes = textoPuntajes + lineasPuntajes[i];
 
         if (i < 2) 
         {
@@ -719,7 +731,16 @@ function draw()
         }
       }
 
-      dibujarCuadro(textoPuntajes, 640, 300, 980, 240);
+      dibujarCuadro(textoPuntajes, 640, 300, 980, 240, 44);
+
+      //ícono de moneda al final de cada puesto que tenga un puntaje con promedio
+      for (let i = 0; i < 3; i = i + 1) 
+      {
+        if (listaPuntajes[i] != undefined && listaPuntajes[i].resultado != "") 
+        {
+          dibujarMoneda(lineasPuntajes[i], 640, 278 + i * 44);
+        }
+      }
     break;
 
     case ESTADO_JUEGO:
@@ -786,8 +807,9 @@ function draw()
           let porcentajeIntactaFinal = 100 - floor((juego.cantidadBloqueadas / 
           juego.totalCeldasActivas) * 100);
 
-          guardarPuntaje(segundosSobrevividos, juego.resultado, juego.nivelO2W, porcentajeIntactaFinal, 
-          juego.cantidadDesviados);
+          //guardarPuntaje() devuelve el puesto obtenido (0, 1 o 2) o -1 si quedó fuera del top 3
+          juego.puestoObtenido = guardarPuntaje(segundosSobrevividos, juego.resultado, juego.nivelO2W, 
+          porcentajeIntactaFinal, juego.cantidadDesviados);
         }
       }
 
@@ -880,8 +902,24 @@ function draw()
           segundosJugados = 60;
         }
 
-        dibujarCuadro(juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + 
-        segundosJugados + " segundos.", 640, 327, 500, 230);
+        let textoResultado = juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + 
+        segundosJugados + " segundos.";
+
+        //si ganó y entró al top 3, se suma la recompensa en ASTRO$ según el puesto
+        let lineaRecompensa = "";
+        if (juego.resultado == "VICTORIA" && juego.puestoObtenido != -1) 
+        {
+          lineaRecompensa = "Puesto " + (juego.puestoObtenido + 1) + ": ganaste " + 
+          RECOMPENSAS_PUESTO[juego.puestoObtenido] + " ASTRO$";
+          textoResultado = textoResultado + "\n" + lineaRecompensa;
+        }
+
+        dibujarCuadro(textoResultado, 640, 327, 500, 230);
+
+        if (lineaRecompensa != "") 
+        {
+          dibujarMoneda(lineaRecompensa, 640, 327 + 51);
+        }
         dibujarBoton("JUGAR DE NUEVO", 640, 469, 320, 48, 0);
         dibujarBoton("INICIO", 640, 535, 320, 48, 0);
       }
@@ -1036,6 +1074,9 @@ class Juego
     this.resultado = "";
     this.detalleResultado = "";
 
+    //puesto obtenido en la tabla al ganar (0, 1 o 2), -1 si no entró al top 3
+    this.puestoObtenido = -1;
+
     /*integridad de la plataforma: si se bloquea demasiado (no solo la celda propia), se 
     pierde la partida aunque el O2/W esté bien. Así no alcanza con defender un solo bloque*/
     this.totalCeldasActivas = this.contarCeldasActivas();
@@ -1137,6 +1178,7 @@ class Juego
     this.nivelO2W = 90;
     this.resultado = "";
     this.detalleResultado = "";
+    this.puestoObtenido = -1;
     this.frameDeFin = 0;
     this.totalCeldasActivas = this.contarCeldasActivas();
     this.cantidadBloqueadas = 0;
@@ -1454,7 +1496,7 @@ class Juego
     {
       let m = this.meteoritos[i];
 
-      if (m.activo == true && dist(m.x, m.y, mouseX, mouseY) < this.radioDisparo) 
+      if (m.activo == true && m.desviado == false && dist(m.x, m.y, mouseX, mouseY) < this.radioDisparo) 
       {
         m.interceptar();
         this.cantidadDesviados = this.cantidadDesviados + 1;
@@ -1550,6 +1592,7 @@ class Astronauta
     this.fila = juego_.obtenerFilaSuperficie(columnaInicial_);
     this.columnaAnterior = this.columna;
     this.filaAnterior = this.fila;
+    this.direccion = "ABAJO";
     this.x = 0;
     this.y = 0;
     this.atrapado = false;
@@ -1585,18 +1628,22 @@ class Astronauta
     if (teclaArribaPresionada == true) 
     {
       filaDeseada = this.fila + 1;
+      this.direccion = "ARRIBA";
     }
     if (teclaAbajoPresionada == true) 
     {
       filaDeseada = this.fila - 1;
+      this.direccion = "ABAJO";
     }
     if (teclaIzquierdaPresionada == true) 
     {
       columnaDeseada = this.columna - 1;
+      this.direccion = "IZQUIERDA";
     }
     if (teclaDerechaPresionada == true) 
     {
       columnaDeseada = this.columna + 1;
+      this.direccion = "DERECHA";
     }
 
     if (columnaDeseada == this.columna && filaDeseada == this.fila) 
@@ -1739,26 +1786,97 @@ class Astronauta
 
     if (this.atrapado == true) 
     {
-      //Rover
+      //Rover sincronizado con la dirección del movimiento
       fill(200);
       rectMode(CENTER);
-      rect(0, 8, 58, 28, 2);
-      fill(60);
-      circle(-23, 26, 15);
-      circle(0, 26, 15);
-      circle(23, 26, 15);
-      fill(200);
-      rect(0, -19, 19, 19, 2);
+
+      if (this.direccion == "ARRIBA") 
+      {
+        //vista trasera del rover
+        rect(0, 8, 46, 28, 2);
+        rect(0, -18, 20, 18, 2);
+        fill(60);
+        circle(-20, 26, 15);
+        circle(20, 26, 15);
+        fill(150);
+        rect(0, 8, 26, 10, 1);
+      } 
+      else if (this.direccion == "ABAJO") 
+      {
+        //vista frontal del rover
+        rect(0, 8, 46, 28, 2);
+        rect(0, -18, 22, 18, 2);
+        fill(60);
+        circle(-20, 26, 15);
+        circle(20, 26, 15);
+        rect(0, -18, 14, 8, 1);
+      } 
+      else if (this.direccion == "IZQUIERDA") 
+      {
+        //vista lateral izquierda
+        rect(0, 8, 58, 28, 2);
+        rect(-14, -19, 19, 19, 2);
+        fill(60);
+        circle(-23, 26, 15);
+        circle(0, 26, 15);
+        circle(23, 26, 15);
+      } 
+      else 
+      {
+        //vista lateral derecha (DERECHA)
+        rect(0, 8, 58, 28, 2);
+        rect(14, -19, 19, 19, 2);
+        fill(60);
+        circle(-23, 26, 15);
+        circle(0, 26, 15);
+        circle(23, 26, 15);
+      }
     } 
     else 
     {
-      //Astronauta
-      fill(255);
+      //Astronauta según la dirección del movimiento
       rectMode(CENTER);
-      rect(0, 16, 28, 43, 3);
-      circle(0, -12, 38);
-      fill(0);
-      circle(0, -12, 19);
+
+      if (this.direccion == "ARRIBA") 
+      {
+        //vista de espaldas: todo blanco con tanque de oxígeno como rectángulo simple
+        fill(255);
+        rect(0, 16, 28, 43, 3);
+        circle(0, -12, 38);
+        fill(200);
+        rect(0, 16, 18, 28, 2);
+      } 
+      else if (this.direccion == "IZQUIERDA") 
+      {
+        //vista de perfil a la izquierda: tanque lateral detrás y visor negro de costado
+        fill(200);
+        rect(13, 16, 8, 28, 2);
+        fill(255);
+        rect(0, 16, 24, 43, 3);
+        circle(0, -12, 38);
+        fill(0);
+        rect(-10, -12, 10, 18, 4);
+      } 
+      else if (this.direccion == "DERECHA") 
+      {
+        //vista de perfil a la derecha: tanque lateral detrás y visor negro de costado
+        fill(200);
+        rect(-13, 16, 8, 28, 2);
+        fill(255);
+        rect(0, 16, 24, 43, 3);
+        circle(0, -12, 38);
+        fill(0);
+        rect(10, -12, 10, 18, 4);
+      } 
+      else 
+      {
+        //vista de frente (ABAJO), tal como está originalmente
+        fill(255);
+        rect(0, 16, 28, 43, 3);
+        circle(0, -12, 38);
+        fill(0);
+        circle(0, -12, 19);
+      }
     }
 
     pop();
@@ -1771,6 +1889,8 @@ class Meteorito
   constructor() 
   {
     this.activo = false;
+    this.desviado = false;
+    this.velocidadX = 0;
     this.explotando = false;
     this.frameDeExplosion = 0;
     this.x = 0;
@@ -1794,6 +1914,9 @@ class Meteorito
   generar(juego_) 
   {
     this.activo = true;
+    this.desviado = false;
+    this.velocidadX = 0;
+    this.velocidadY = 3;
 
     let celda = juego_.obtenerCeldaActivaAlAzar();
     this.filaObjetivo = celda[0];
@@ -1824,6 +1947,20 @@ class Meteorito
     {
       this.rastroX.shift();
       this.rastroY.shift();
+    }
+
+    if (this.desviado == true) 
+    {
+      this.x = this.x + this.velocidadX;
+      this.y = this.y + this.velocidadY;
+
+      //cuando sale completamente de la pantalla por los costados o por abajo, se desactiva
+      if (this.x < -60 || this.x > 1280 + 60 || this.y > 720 + 60) 
+      {
+        this.activo = false;
+        this.desviado = false;
+      }
+      return;
     }
 
     this.y = this.y + this.velocidadY;
@@ -1870,12 +2007,22 @@ class Meteorito
     }
   }
 
-  //método: el meteorito es desviado en el aire por un disparo, antes de impactar
+  //método: el meteorito es desviado hacia los costados de la pantalla por un disparo, antes de impactar
   interceptar() 
   {
-    this.activo = false;
-    this.explotando = true;
-    this.frameDeExplosion = frameCount;
+    this.desviado = true;
+
+    //si está en la mitad izquierda se desvía a la izquierda, y si está en la derecha a la derecha
+    if (this.x < 640) 
+    {
+      this.velocidadX = -8;
+    } 
+    else 
+    {
+      this.velocidadX = 8;
+    }
+
+    this.velocidadY = 2;
 
     let panorama = constrain(map(this.x, 0, 1280, -1, 1), -1, 1);
     interceptar.pan(panorama, 0.05);
@@ -2179,7 +2326,7 @@ function dibujarCuadroInstrucciones()
 }
 
 //dibuja un cuadro de texto con esquinas redondeadas de 6 px
-function dibujarCuadro(txt_, x_, y_, ancho_, alto_)  
+function dibujarCuadro(txt_, x_, y_, ancho_, alto_, interlineado_)  
 {
   push();
   translate(x_, y_);
@@ -2193,8 +2340,25 @@ function dibujarCuadro(txt_, x_, y_, ancho_, alto_)
   textAlign(CENTER, CENTER);
   fill(255);
   textSize(18);
-  textLeading(34);
+  textLeading(interlineado_ || 34);
   text(txt_, 0, 0, ancho_-60);
+  pop();
+}
+
+/*dibuja el ícono de moneda justo después de una línea de texto centrada en x_ (mide el ancho 
+de la línea con la misma fuente y tamaño que usa dibujarCuadro())*/
+function dibujarMoneda(linea_, x_, y_) 
+{
+  let tamañoIcono = 32;
+
+  push();
+  textFont(fuenteCuadro);
+  textSize(18);
+  imageMode(CORNER);
+  /*recorta los márgenes transparentes de moneda.png (la moneda ocupa solo el centro de la imagen), 
+  y la dibuja con el mismo tamaño y modo que los íconos de INSTRUCCIONES*/
+  image(monedaIcono, x_ + textWidth(linea_)/2 + 6, y_ - tamañoIcono/2, tamañoIcono, tamañoIcono, 
+  258, 8, 564, 569);
   pop();
 }
 
@@ -2225,8 +2389,8 @@ function chequearClick(x_, y_, ancho_, alto_, estadoDestino_)
 
 /*guarda un puntaje nuevo (resultado, segundos sobrevividos, O2/W final, % de plataforma intacta y 
 cantidad de meteoritos desviados) en localStorage: si ya existe un registro idéntico no lo duplica, 
-ordena por segundos (con O2/W y plataforma como desempate) de mayor a menor y conserva solo los 
-3 mejores*/
+ordena por promedio (con O2/W final como desempate) de mayor a menor, conserva solo los 
+3 mejores y devuelve el puesto obtenido (0, 1 o 2) o -1 si quedó fuera*/
 function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_) 
 {
   let lista = obtenerPuntajes();
@@ -2243,7 +2407,7 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
 
   if (yaExiste) 
   {
-    return;
+    return buscarPuesto(lista, segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_);
   }
 
   lista.push
@@ -2256,7 +2420,8 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
   });
 
   /*orden principal por el promedio de O2/W, % de plataforma y meteoritos desviados; empatado, 
-  desempata segundos*/
+  desempata el O2/W final (el objetivo central del juego); si también empata, desempata la 
+  cantidad de segundos sobrevividos para que el orden quede siempre fijo entre puntajes iguales*/
   lista.sort(function(a_, b_) 
   {
     let promedioA = (a_.nivelO2W + a_.porcentajePlataforma + a_.cantidadDesviados) / 3;
@@ -2266,12 +2431,35 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     {
       return promedioB - promedioA;
     }
-    return b_.segundos - a_.segundos;
+    if (b_.nivelO2W != a_.nivelO2W) 
+    {
+      return b_.nivelO2W - a_.nivelO2W;
+    }
+    if (b_.segundos != a_.segundos) 
+    {
+      return b_.segundos - a_.segundos;
+    }
+    return 0;
   });
 
   lista = lista.slice(0, 3);
 
   localStorage.setItem(CLAVE_PUNTAJES, JSON.stringify(lista));
+
+  return buscarPuesto(lista, segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_);
+}
+
+//devuelve la posición (0, 1 o 2) de un puntaje dentro de la lista, o -1 si no está
+function buscarPuesto(lista_, segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_) 
+{
+  for (let i = 0; i < lista_.length; i = i + 1) 
+  {
+    if (lista_[i].segundos == segundos_ && lista_[i].resultado == resultado_ && 
+    lista_[i].nivelO2W == nivelO2W_ && lista_[i].porcentajePlataforma == porcentajePlataforma_ &&
+    lista_[i].cantidadDesviados == cantidadDesviados_) 
+    {return i;}
+  }
+  return -1;
 }
 
 /*lee la lista de puntajes guardados en este navegador (array vacío si no hay nada o 
