@@ -3,7 +3,7 @@
 Sketch web lúdico desarrollado como el tercer trabajo práctico para la asignatura Informática Aplicada 1 – Cátedra Bedoian, en el marco de la Tecnicatura en Artes Multimediales y Electrónicas (UNA).
 
 ## Descripción
-Proyecto orientado al diseño y desarrollo de un minijuego que representa la capacidad tecnológica humana actual para poder explorar el universo cómo así también su limitación física al encontrarse con el mismo, donde el personaje principal está dado por un astronauta/rover que debe evitar quedarse sin oxígeno/energía cómo así también ser alcanzado por un meteorito, paralelamente una mira teslescópica permite desviar los meteoritos que impactan contra la plataforma, la cual posee una identificación cromática por celdas diferenciadas aleatoriamente. Para poder jugarlo es necesario el uso de teclado y mouse.
+Proyecto orientado al diseño y desarrollo de un minijuego que representa tanto la capacidad tecnológica humana actual para explorar el universo como sus limitaciones físicas al enfrentarse a él. El personaje principal, representado por un astronauta que puede transformarse en rover, debe evitar quedarse sin oxígeno o energía, así como ser alcanzado por meteoritos. Paralelamente, una mira telescópica permite desviar los meteoritos que impactan contra la plataforma, compuesta por celdas con identificaciones cromáticas diferenciadas y distribuidas aleatoriamente. Para jugarlo, es necesario utilizar teclado y mouse.
 
 ## Tecnologías utilizadas
 - HTML
