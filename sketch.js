@@ -25,7 +25,7 @@ let lienzo;
 //Variables para cargar los archivos:
 let musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, 
 meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, 
-relojIcono, saludIcono, miraIcono, monedaIcono;
+relojIcono, saludIcono, miraIcono, monedaIcono, aurisIcono;
 
 //recompensa en moneda (ASTRO$) según el puesto obtenido: primero, segundo y tercero
 let RECOMPENSAS_PUESTO = [100, 60, 30];
@@ -40,6 +40,23 @@ let frameUltimoSonidoMeteorito = -10;
 //control para el efecto de interferencia en la música cuando el astronauta está atrapado
 let interferenciaActiva = false;
 let frameUltimoCorteInterferencia = 0;
+/*duración (en frames) del tramo actual de la interferencia, se sortea una sola vez por tramo 
+para que los cortes sean irregulares como en una señal real y no un ritmo acelerado*/
+let duracionTramoInterferencia = 10;
+//ruido de estática que se mezcla con la música durante la interferencia
+let ruidoInterferencia;
+let ruidoActivo = false;
+/*volumen de la estática del tramo actual y control de sus pequeños cortes: dentro de cada tramo 
+la estática aparece en ráfagas breves de duración irregular, separadas por pequeños silencios*/
+let volumenEstatica = 0;
+let frameUltimoCorteEstatica = 0;
+let duracionCorteEstatica = 0;
+//volumen de la música según la pantalla: 0.3 en menús y más bajo en el juego (debajo de los efectos)
+let volumenMusica = 0.3;
+
+//posición de la mira (sigue al mouse directamente)
+let miraX = 640;
+let miraY = 360;
 
 //control para el efecto visual del disparo
 let disparoX = 0;
@@ -179,7 +196,7 @@ function preload()
   fuenteCuadro = loadFont("assets/Montserrat-Regular.ttf");
 
   alertaIcono = loadImage("assets/alerta.png", "Ícono de un triángulo con signo de exclamación");
-  astroIcono = loadImage("assets/astronauta.png", "Ícono del casco de un Astronauta con visor");
+  astroIcono = loadImage("assets/movimiento.png", "Ícono del movimiento con flechas en 4 direcciones");
   meteoritoIcono = loadImage("assets/meteorito.png", "Ícono de un asteroide simple");
   musicaEncenderIcono = loadImage("assets/musica-encender.png", "Ícono de una nota musical");
   musicaApagarIcono = loadImage("assets/musica-apagar.png", "Ícono de una nota musical tachada");
@@ -189,6 +206,7 @@ function preload()
   saludIcono = loadImage("assets/salud.png", "Ícono de un círculo con un signo más");
   miraIcono = loadImage("assets/telescopio.png", "Ícono de un telescopio con vista lateral");
   monedaIcono = loadImage("assets/moneda.png", "Ícono de una moneda de astros");
+  aurisIcono = loadImage("assets/auris.png", "Ícono de unos auriculares");
 }
 
 function setup() 
@@ -211,10 +229,47 @@ function setup()
   musica.setLoop(true);
   musica.amp(0.3);
   meteorito.amp(0.35);
-  interceptar.amp(0.3);
+  interceptar.amp(0.7);
   muerteSer.amp(0.6);
 
+  /*ruido blanco (estática de señal de radio) que queda sonando en volumen 0 desde el inicio, así 
+  solo se le cambia el volumen durante la interferencia y no se crean nodos nuevos cada vez*/
+  ruidoInterferencia = new p5.Noise("white");
+  ruidoInterferencia.amp(0);
+  ruidoInterferencia.start();
+
   juego = new Juego();
+}
+
+/*reproduce un efecto de sonido usando su mismo buffer y su misma salida (volumen y paneo 
+de amp() y pan() se mantienen): play() de p5.sound crea un nodo interno nuevo en cada 
+llamado que nunca se libera, y tras muchas reproducciones el audio se entrecorta y se silencia*/
+function reproducirSonido(sonido, factorVolumen = 1) 
+{
+  let contexto = getAudioContext();
+  let fuente = contexto.createBufferSource();
+  fuente.buffer = sonido.buffer;
+
+  /*cada reproducción pasa por su propia ganancia, así un sonido lejano no le baja el 
+  volumen a otro cercano que esté sonando al mismo tiempo*/
+  let ganancia = contexto.createGain();
+  ganancia.gain.value = factorVolumen;
+  fuente.connect(ganancia);
+  ganancia.connect(sonido.output);
+  fuente.onended = function () 
+  {
+    ganancia.disconnect();
+  };
+  fuente.start();
+}
+
+/*volumen según la distancia al astronauta: al lado suena al nivel actual (1) y se va 
+atenuando hasta un mínimo audible (0.3) a partir de los 700 px de distancia*/
+function factorVolumenPorDistancia(x_, y_, juego_) 
+{
+  let astronauta = juego_.astronauta;
+  let distancia = dist(x_, y_, astronauta.x, astronauta.y);
+  return constrain(map(distancia, 0, 700, 1, 0.3), 0.3, 1);
 }
 
 /*viñeta: degradé radial real generado una sola vez (vía drawingContext, el 
@@ -328,7 +383,7 @@ function generarEstrellas()
   }
 }
 
-//fondo procedural: cielo, nebulosa realista, estrellas titilando y viñeta.
+//fondo procedural: cielo, nebulosa grisácea, estrellas titilando y viñeta.
 function dibujarFondo() 
 {
   background(4, 4, 12);
@@ -403,8 +458,8 @@ function redibujarEstrellas()
   contexto.globalAlpha = 1;
 }
 
-/*nebulosa: varios cúmulos de partículas de colores superpuestas con mezcla aditiva, como una 
-nube real vista en fotografías astronómicas (no una forma geométrica lisa)*/
+/*nebulosa: varios cúmulos de partículas grises superpuestas con mezcla aditiva, como una 
+nube tenue vista a ojo desde un telescopio (no una forma geométrica lisa)*/
 let nebulosas = [];
 
 /*vetas de polvo oscuras que se dibujan encima de la nebulosa, sin mezcla aditiva, para que la 
@@ -413,25 +468,31 @@ let filamentos = [];
 
 function generarNebulosas() 
 {
-  //cúmulo lejano: grande, difuso, cubre buena parte del cielo, colores fríos
+  /*todos los cúmulos son grises neutros (rojo, verde y azul iguales): la nebulosa no debe 
+  competir con los colores del juego y se ve como la percibe el ojo humano desde un telescopio*/
+
+  /*cada cúmulo mezcla grises oscuros y grises claros, así la nube tiene zonas más densas y 
+  luminosas junto a zonas apagadas en vez de un gris medio parejo*/
+
+  //cúmulo lejano: grande, difuso, cubre buena parte del cielo, mayoría de grises oscuros
   nebulosas.push(crearCumulo(360, 220, 560, 65, 
-  [color(70, 60, 140), color(40, 110, 160), color(90, 50, 130)], 0.16, 0.0025));
+  [color(46, 46, 46), color(58, 58, 58), color(150, 150, 150), color(52, 52, 52)], 0.16, 0.0025));
 
-  //cúmulo cercano: más chico, más denso y saturado, colores cálidos mezclados
+  //cúmulo cercano: más chico y más denso, mezcla pareja de oscuros y claros
   nebulosas.push(crearCumulo(820, 260, 340, 36, 
-  [color(200, 60, 130), color(140, 70, 200), color(80, 130, 210)], 0.32, 0.004));
+  [color(60, 60, 60), color(176, 176, 176), color(70, 70, 70), color(190, 190, 190)], 0.32, 0.004));
 
-  //tercer cúmulo, más chico y saturado todavía, para reforzar la profundidad
+  //tercer cúmulo, más chico y con más grises claros, para reforzar la profundidad
   nebulosas.push(crearCumulo(980, 400, 200, 20, 
-  [color(220, 90, 150), color(160, 90, 220)], 0.4, 0.006));
+  [color(200, 200, 200), color(66, 66, 66), color(184, 184, 184)], 0.4, 0.006));
 
   /*dos cúmulos más, del lado izquierdo y arriba a la derecha, para que la nebulosa cubra 
   bastante más cielo y no se sienta concentrada en un solo sector*/
   nebulosas.push(crearCumulo(150, 520, 320, 29, 
-  [color(60, 90, 160), color(90, 60, 150)], 0.2, 0.003));
+  [color(48, 48, 48), color(160, 160, 160), color(56, 56, 56)], 0.2, 0.003));
 
   nebulosas.push(crearCumulo(1100, 140, 280, 26, 
-  [color(150, 70, 190), color(70, 100, 200)], 0.24, 0.0035));
+  [color(170, 170, 170), color(54, 54, 54), color(64, 64, 64)], 0.24, 0.0035));
 
   filamentos.push(crearFilamento(430, 260, 260, 40, 0.35, 0.0008));
   filamentos.push(crearFilamento(860, 300, 180, 26, -0.5, 0.0012));
@@ -525,7 +586,7 @@ function redibujarNebulosa()
 
   let contexto = bufferNebulosa.drawingContext;
 
-  //cúmulos, con mezcla aditiva (como una nube real vista en fotos astronómicas)
+  //cúmulos, con mezcla aditiva (como una nube tenue vista a ojo desde un telescopio)
   contexto.save();
   contexto.globalCompositeOperation = "lighter";
 
@@ -551,7 +612,7 @@ function redibujarNebulosa()
   contexto.restore();
 
   /*vetas de polvo encima de la nebulosa, con mezcla normal (no aditiva) para que resten brillo 
-  en vez de sumarlo: es lo que rompe la mancha de color pareja y le da textura más real*/
+  en vez de sumarlo: es lo que rompe la mancha gris pareja y le da textura más real*/
   contexto.save();
   contexto.fillStyle = "rgb(4, 4, 12)";
 
@@ -616,33 +677,72 @@ function draw()
   //efecto de interferencia en la música cuando el astronauta está atrapado (rover)
   if (interferenciaActiva == true && musica.isPlaying() == true) 
   {
-    //entrecortado drástico simulando pérdida de señal sin usar pause/play
-    if (frameCount - frameUltimoCorteInterferencia > random(3, 8)) 
+    /*entrecortado simulando pérdida de señal sin usar pause/play: la señal se alterna entre 
+    tramos de duración irregular y el volumen solo cambia al empezar cada tramo (no en cada frame)*/
+    if (frameCount - frameUltimoCorteInterferencia >= duracionTramoInterferencia) 
     {
-      //corte completo momentáneo (volumen 0)
-      musica.amp(0.0, 0.01);
+      let sorteo = random(0, 1);
+
+      if (sorteo < 0.35) 
+      {
+        //corte completo de la señal: la música desaparece y queda solo la estática
+        musica.amp(0.0, 0.02);
+        volumenEstatica = volumenMusica * 0.25;
+        duracionTramoInterferencia = floor(random(6, 20));
+      }
+      else if (sorteo < 0.7) 
+      {
+        //señal débil: música muy baja tapada por la estática
+        musica.amp(volumenMusica * random(0.15, 0.35), 0.02);
+        volumenEstatica = volumenMusica * 0.18;
+        duracionTramoInterferencia = floor(random(8, 24));
+      }
+      else 
+      {
+        //recuperación parcial: la música vuelve y la estática queda de fondo
+        musica.amp(volumenMusica * random(0.6, 0.9), 0.05);
+        volumenEstatica = volumenMusica * 0.07;
+        duracionTramoInterferencia = floor(random(12, 30));
+      }
+
+      ruidoActivo = true;
       frameUltimoCorteInterferencia = frameCount;
     }
-    else if (frameCount - frameUltimoCorteInterferencia == 1) 
+
+    /*estática breve e irregular: ráfagas cortas de intensidad variable separadas por pequeños 
+    cortes, el volumen solo cambia al empezar cada ráfaga o corte (no en cada frame)*/
+    if (frameCount - frameUltimoCorteEstatica >= duracionCorteEstatica) 
     {
-      //reanudación con volumen muy bajo
-      musica.amp(random(0.05, 0.15), 0.01);
-    }
-    else if (frameCount - frameUltimoCorteInterferencia == 2) 
-    {
-      //volumen medio-bajo
-      musica.amp(random(0.1, 0.2), 0.01);
-    }
-    else 
-    {
-      //recuperación parcial con variación
-      musica.amp(random(0.15, 0.3), 0.01);
+      if (random(0, 1) < 0.4) 
+      {
+        //pequeño corte: la estática se silencia un instante
+        ruidoInterferencia.amp(0, 0.005);
+        duracionCorteEstatica = floor(random(1, 4));
+      }
+      else 
+      {
+        //ráfaga breve de estática
+        ruidoInterferencia.amp(volumenEstatica * random(0.6, 1), 0.005);
+        duracionCorteEstatica = floor(random(2, 7));
+      }
+
+      frameUltimoCorteEstatica = frameCount;
     }
   } 
-  else if (interferenciaActiva == false && musica.isPlaying() == true) 
+  else if (interferenciaActiva == false && musica.isPlaying() == true && 
+  abs(musica.getVolume() - volumenMusica) > 0.01) 
   {
     //restaurar volumen normal cuando no hay interferencia
-    musica.amp(0.3, 0.2);
+    musica.amp(volumenMusica, 0.2);
+  }
+
+  //silenciar la estática una sola vez al terminar la interferencia o al apagar la música
+  if ((interferenciaActiva == false || musica.isPlaying() == false) && ruidoActivo == true) 
+  {
+    ruidoInterferencia.amp(0, 0.1);
+    ruidoActivo = false;
+    duracionTramoInterferencia = 0;
+    duracionCorteEstatica = 0;
   }
 
   switch(estado) 
@@ -655,41 +755,62 @@ function draw()
       textFont(fuenteBoton);
       textAlign(CENTER, CENTER);
       textSize(36);
-      text("UMBRAL", 640, 190);
+      text("UMBRAL", 640, 220);
       pop();
 
       /*toggles a los costados del título: música a la izquierda, pantalla completa a la derecha.
       Quedan alineados con el ancho del botón JUGAR (320 de ancho, centrado en 640): el borde 
       izquierdo del de música coincide con el izquierdo de JUGAR (480) y el borde derecho del 
       de pantalla completa coincide con el derecho de JUGAR (800)*/
-      dibujarToggle(musica.isPlaying() ? musicaApagarIcono : musicaEncenderIcono, 500, 196, 40);
+      dibujarToggle(musica.isPlaying() ? musicaApagarIcono : musicaEncenderIcono, 500, 226, 40);
       dibujarToggle(document.fullscreenElement ? pantallaIncompletaIcono : pantallaCompletaIcono, 
-      780, 196, 40);
+      780, 226, 40);
 
-      dibujarBoton("JUGAR", 640, 261, 320, 48, color(224, 205, 170), color(0));
+      dibujarBoton("JUGAR", 640, 291, 320, 48, color(224, 205, 170), color(0));
 
-      dibujarBoton("PUNTAJES", 640, 327, 320, 48);
-      dibujarBoton("INSTRUCCIONES", 640, 393, 320, 48);
-      dibujarBoton("CRÉDITOS", 640, 459, 320, 48);
+      dibujarBoton("PUNTAJES", 640, 357, 320, 48);
+      dibujarBoton("INSTRUCCIONES", 640, 423, 320, 48);
+      dibujarBoton("CRÉDITOS", 640, 489, 320, 48);
     break;
 
     case ESTADO_INSTRUCCIONES:
       dibujarFondo();
-      dibujarBoton("JUGAR", 640, 510, 320, 48, color(224, 205, 170), color(0));
-      dibujarBoton("ATRÁS", 640, 576, 320, 48, 0);
+      dibujarBoton("ATRÁS", 640, 617, 320, 48, 0);
       dibujarCuadroInstrucciones();
     break;
 
     case ESTADO_CREDITOS:
       dibujarFondo();
-      dibujarBoton("ATRÁS", 640, 450, 320, 48, 0);
-      dibujarCuadro("Autoría: Daniel Toledo\nEste minijuego representa la capacidad tecnológica humana actual para explorar el universo, y también sus límites físicos al enfrentarlo.",
-      640, 320, 1000, 150);
+      dibujarBoton("ATRÁS", 640, 445, 320, 48, 0);
+
+      /*la oración larga se corta a mano en dos líneas y el ancho del cuadro se ajusta a la línea 
+      más larga más el margen lateral de dibujarCuadro() (30 a cada lado), equivalente al vertical*/
+      let lineasCreditos = ["Autoría: Daniel Toledo", 
+      "Este minijuego representa la capacidad tecnológica humana actual", 
+      "para explorar el universo, y también sus límites físicos al enfrentarlo."];
+      push();
+      textFont(fuenteCuadro);
+      textSize(18);
+      let anchoCreditos = 0;
+      for (let i = 0; i < lineasCreditos.length; i = i + 1) 
+      {
+        anchoCreditos = max(anchoCreditos, textWidth(lineasCreditos[i]));
+      }
+
+      dibujarCuadro("", 640, 324, ceil(anchoCreditos) + 60, 146);
+      textAlign(CENTER, CENTER);
+      fill(255);
+      noStroke();
+      for (let i = 0; i < lineasCreditos.length; i = i + 1) 
+      {
+        text(lineasCreditos[i], 640, 290 + i * 34);
+      }
+      pop();
     break;
 
     case ESTADO_PUNTAJES:
       dibujarFondo();
-      dibujarBoton("ATRÁS", 640, 520, 320, 48, 0);
+      dibujarBoton("ATRÁS", 640, 492, 320, 48, 0);
 
       //arma el texto con los 3 mejores puntajes guardados en este navegador ("—" si falta alguno)
       let listaPuntajes = obtenerPuntajes();
@@ -714,16 +835,17 @@ function draw()
         } 
         else 
         {
-          /*no se muestran los segundos: esta pantalla solo lista el top 3, que en la práctica son 
-          victorias. Al final va el promedio y los ASTRO$ que corresponden a ese puesto*/
+          /*solo se muestra el promedio y los ASTRO$ que corresponden a ese puesto (el ícono de 
+          moneda se agrega después, al final de la línea)*/
           let promedioPuntaje = round((datoPuntaje.nivelO2W + datoPuntaje.porcentajePlataforma + 
           datoPuntaje.cantidadDesviados) / 3);
-          lineasPuntajes[i] = lineasPuntajes[i] + "O2/W " + datoPuntaje.nivelO2W + " · Plataforma " + 
-          datoPuntaje.porcentajePlataforma + "% · Desviados " + datoPuntaje.cantidadDesviados + 
-          " · Promedio " + promedioPuntaje + " · " + RECOMPENSAS_PUESTO[i] + " ASTRO$";
+          lineasPuntajes[i] = lineasPuntajes[i] + promedioPuntaje + " · " + RECOMPENSAS_PUESTO[i] + 
+          " ASTRO$";
         }
 
-        textoPuntajes = textoPuntajes + lineasPuntajes[i];
+        /*en el cuadro solo queda el título y un renglón vacío por puesto, las líneas se dibujan 
+        después alineadas a la izquierda para que empiecen todas desde el número*/
+        textoPuntajes = textoPuntajes + " ";
 
         if (i < 2) 
         {
@@ -731,16 +853,51 @@ function draw()
         }
       }
 
-      dibujarCuadro(textoPuntajes, 640, 300, 980, 240, 44);
-
-      //ícono de moneda al final de cada puesto que tenga un puntaje con promedio
+      /*el ancho del cuadro se ajusta a la línea más larga (incluido el ícono de moneda, sumado 
+      a ambos lados para que el texto siga centrado) más el mismo margen lateral en cada lado*/
+      push();
+      textFont(fuenteCuadro);
+      textSize(18);
+      let anchoContenido = textWidth("MEJORES PUNTAJES");
+      //ancho del bloque de líneas (con su ícono de moneda), para centrarlo como un todo
+      let anchoLineas = 0;
       for (let i = 0; i < 3; i = i + 1) 
       {
+        let anchoLinea = textWidth(lineasPuntajes[i]);
         if (listaPuntajes[i] != undefined && listaPuntajes[i].resultado != "") 
         {
-          dibujarMoneda(lineasPuntajes[i], 640, 278 + i * 44);
+          anchoLinea = anchoLinea + 32 + 12;
+        }
+        anchoLineas = max(anchoLineas, anchoLinea);
+      }
+      anchoContenido = max(anchoContenido, anchoLineas);
+      pop();
+      //mismo margen lateral que el vertical (240 de alto menos el bloque de 4 líneas, dividido 2)
+      let margenLateralPuntajes = 45;
+      let anchoCuadroPuntajes = anchoContenido + margenLateralPuntajes * 2;
+
+      dibujarCuadro(textoPuntajes, 640, 324, anchoCuadroPuntajes, 240, 44);
+
+      /*cada puesto alineado a la izquierda desde el mismo x (todas las líneas empiezan en el 
+      número), con el ícono de moneda al final de cada puesto que tenga un puntaje con promedio*/
+      let xInicioLineas = 640 - anchoLineas/2;
+      push();
+      textFont(fuenteCuadro);
+      textSize(18);
+      textAlign(LEFT, CENTER);
+      fill(255);
+      noStroke();
+      for (let i = 0; i < 3; i = i + 1) 
+      {
+        text(lineasPuntajes[i], xInicioLineas, 302 + i * 44);
+
+        if (listaPuntajes[i] != undefined && listaPuntajes[i].resultado != "") 
+        {
+          //dibujarMoneda() toma x_ como el centro de la línea
+          dibujarMoneda(lineasPuntajes[i], xInicioLineas + textWidth(lineasPuntajes[i])/2, 302 + i * 44);
         }
       }
+      pop();
     break;
 
     case ESTADO_JUEGO:
@@ -851,8 +1008,9 @@ function draw()
       noStroke();
       fill(200, 40, 40);
       rect(bateriaX, bateriaY, bateriaAncho, bateriaAlto);
+      //el verde se ancla a la derecha, así el rojo crece de izquierda a derecha
       fill(60, 200, 90);
-      rect(bateriaX, bateriaY, bateriaAncho * fraccionO2W, bateriaAlto);
+      rect(bateriaX + bateriaAncho * (1 - fraccionO2W), bateriaY, bateriaAncho * fraccionO2W, bateriaAlto);
       noFill();
       stroke(255);
       strokeWeight(2);
@@ -877,8 +1035,9 @@ function draw()
       fill(210);
       if (fraccionIntacta > 0) 
       {
-        arc(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2, -HALF_PI, -HALF_PI + 
-        fraccionIntacta * TWO_PI, PIE);
+        //el gris claro termina siempre arriba, así el gris oscuro crece desde arriba en sentido horario
+        arc(circuloX, circuloY, circuloRadio * 2, circuloRadio * 2, -HALF_PI + 
+        (1 - fraccionIntacta) * TWO_PI, -HALF_PI + TWO_PI, PIE);
       }
 
       pop();
@@ -902,8 +1061,30 @@ function draw()
           segundosJugados = 60;
         }
 
-        let textoResultado = juego.resultado + "\n" + juego.detalleResultado + "\nSobreviviste " + 
-        segundosJugados + " segundos.";
+        let lineaSobreviviste = "Sobreviviste " + segundosJugados + " segundos.";
+        let textoResultado;
+
+        //sin "VICTORIA"/"DERROTA": la cita y su autora van debajo de la frase que corresponde
+        if (juego.resultado == "VICTORIA") 
+        {
+          textoResultado = lineaSobreviviste + 
+          "\n\"El cuerpo humano está hecho para la Tierra.\"" + 
+          "\nNoel de Castro · Ingeniera biomédica";
+        } 
+        else if (juego.detalleResultado == "Te quedaste sin O2/W.") 
+        {
+          textoResultado = juego.detalleResultado + 
+          "\n\"En el espacio los recursos son limitados.\"" + 
+          "\nMaría Fernanda Mora · Química analítica" + 
+          "\n" + lineaSobreviviste;
+        } 
+        else 
+        {
+          textoResultado = juego.detalleResultado + 
+          "\n\"El peso es todo en el espacio.\"" + 
+          "\nClara O'Farrell · Ingeniera mecánica y aeroespacial" + 
+          "\n" + lineaSobreviviste;
+        }
 
         //si ganó y entró al top 3, se suma la recompensa en ASTRO$ según el puesto
         let lineaRecompensa = "";
@@ -914,7 +1095,9 @@ function draw()
           textoResultado = textoResultado + "\n" + lineaRecompensa;
         }
 
-        dibujarCuadro(textoResultado, 640, 327, 500, 230);
+        /*máximo 4 líneas (igual que antes con la recompensa), así el alto y los márgenes 
+        verticales no cambian; se ensancha para que la línea de la autora no se corte*/
+        dibujarCuadro(textoResultado, 640, 327, 640, 230);
 
         if (lineaRecompensa != "") 
         {
@@ -940,7 +1123,7 @@ function mousePressed()
   switch(estado) 
   {
     case ESTADO_MENU:
-      if(mouseOverRect(500, 196, 40, 40))
+      if(mouseOverRect(500, 226, 40, 40))
       {
         /*se reanuda el AudioContext y se arranca/pausa la música en el mismo paso síncrono del 
         click: si loop() se llama recién adentro del .then() de userStartAudio(), ese llamado 
@@ -960,16 +1143,16 @@ function mousePressed()
           musica.setLoop(true);
           musica.loop();
           //asegurar volumen normal al reanudar
-          musica.amp(0.3, 0.1);
+          musica.amp(volumenMusica, 0.1);
         }
       }
 
-      if(mouseOverRect(780, 196, 40, 40))
+      if(mouseOverRect(780, 226, 40, 40))
       {
         alternarPantallaCompleta();
       }
 
-      if(mouseOverRect(640, 261, 320, 48))
+      if(mouseOverRect(640, 291, 320, 48))
       {
         //frameCount para la partida arranca acá, no antes
         juego.frameDeInicio = frameCount;
@@ -977,28 +1160,21 @@ function mousePressed()
         estado = ESTADO_JUEGO;
       }
 
-      chequearClick(640, 327, 320, 48, ESTADO_PUNTAJES);
-      chequearClick(640, 393, 320, 48, ESTADO_INSTRUCCIONES);
-      chequearClick(640, 459, 320, 48, ESTADO_CREDITOS);
+      chequearClick(640, 357, 320, 48, ESTADO_PUNTAJES);
+      chequearClick(640, 423, 320, 48, ESTADO_INSTRUCCIONES);
+      chequearClick(640, 489, 320, 48, ESTADO_CREDITOS);
     break;
 
     case ESTADO_INSTRUCCIONES:
-      if(mouseOverRect(640, 510, 320, 48))
-      {
-        //mismo reinicio que el botón JUGAR del menú
-        juego.frameDeInicio = frameCount;
-        juego.reiniciar();
-        estado = ESTADO_JUEGO;
-      }
-      chequearClick(640, 576, 320, 48, ESTADO_MENU);
+      chequearClick(640, 617, 320, 48, ESTADO_MENU);
     break;
 
     case ESTADO_CREDITOS:
-      chequearClick(640, 450, 320, 48, ESTADO_MENU);
+      chequearClick(640, 445, 320, 48, ESTADO_MENU);
     break;
 
     case ESTADO_PUNTAJES:
-      chequearClick(640, 520, 320, 48, ESTADO_MENU);
+      chequearClick(640, 492, 320, 48, ESTADO_MENU);
     break;
 
     case ESTADO_JUEGO:
@@ -1014,9 +1190,10 @@ function mousePressed()
         if(mouseOverRect(640, 535, 320, 48))
         {
           interferenciaActiva = false;
+          volumenMusica = 0.3;
           if (musica.isPlaying() == true) 
           {
-            musica.amp(0.3, 0.1);
+            musica.amp(volumenMusica, 0.1);
           }
           estado = ESTADO_MENU;
         }
@@ -1168,10 +1345,11 @@ class Juego
     frameUltimoSonidoMeteorito = -10;
     interferenciaActiva = false;
     frameUltimoCorteInterferencia = 0;
+    volumenMusica = 0.12;
 
     if (musica.isPlaying() == true) 
     {
-      musica.amp(0.3, 0.1);
+      musica.amp(volumenMusica, 0.1);
     }
 
     this.generarFilas();
@@ -1496,7 +1674,7 @@ class Juego
     {
       let m = this.meteoritos[i];
 
-      if (m.activo == true && m.desviado == false && dist(m.x, m.y, mouseX, mouseY) < this.radioDisparo) 
+      if (m.activo == true && m.desviado == false && dist(m.x, m.y, miraX, miraY) < this.radioDisparo) 
       {
         m.interceptar();
         this.cantidadDesviados = this.cantidadDesviados + 1;
@@ -1596,6 +1774,8 @@ class Astronauta
     this.x = 0;
     this.y = 0;
     this.atrapado = false;
+    //tipo de bloque que está pisando, para decidir qué traje usar (o seguir como Rover)
+    this.tipoPisado = TIPO_GRIS_CLARO;
     this.framesQuieto = 0;
     this.proximoFrameMovimiento = 0;
     this.velocidadMovimiento = 8;
@@ -1718,6 +1898,7 @@ class Astronauta
   actualizarNivel(juego_) 
   {
     let tipoActual = juego_.obtenerTipoDeCelda(this.fila, this.columna);
+    this.tipoPisado = tipoActual;
 
     if (this.columna != this.columnaAnterior || this.fila != this.filaAnterior) 
     {
@@ -1778,108 +1959,164 @@ class Astronauta
   }
 
   //método: dibuja astronauta o rover según esté atrapado o no
+  /*al liberarse sigue como Rover mientras esté sobre el bloque rojo, y recién al moverse cambia 
+  al traje del bloque que pisa*/
   dibujar() 
   {
     push();
     translate(this.x, this.y - 18);
     noStroke();
 
-    if (this.atrapado == true) 
+    if (this.atrapado == true || this.tipoPisado == TIPO_ROJO) 
     {
       //Rover sincronizado con la dirección del movimiento
+      //franja, cámaras (sensores) y bandera en el chasis emulando al RoverTito argentino
       fill(200);
       rectMode(CENTER);
 
       if (this.direccion == "ARRIBA") 
       {
-        //vista trasera del rover
+        //vista trasera del rover: franja
         rect(0, 8, 46, 28, 2);
-        rect(0, -18, 20, 18, 2);
         fill(60);
         circle(-20, 26, 15);
         circle(20, 26, 15);
         fill(150);
         rect(0, 8, 26, 10, 1);
+        fill(116, 172, 223);
+        rect(0, 16, 46, 4);
       } 
       else if (this.direccion == "ABAJO") 
       {
-        //vista frontal del rover
+        //vista frontal del rover: franja y 2 cámaras (sensores)
         rect(0, 8, 46, 28, 2);
-        rect(0, -18, 22, 18, 2);
         fill(60);
         circle(-20, 26, 15);
         circle(20, 26, 15);
-        rect(0, -18, 14, 8, 1);
+        fill(116, 172, 223);
+        rect(0, 12, 46, 5);
+        //carcasa de cada cámara con su lente oscura y un brillo chico
+        fill(40);
+        rect(-9, 1, 13, 10, 2);
+        rect(9, 1, 13, 10, 2);
+        fill(0);
+        circle(-9, 1, 7);
+        circle(9, 1, 7);
+        fill(116, 172, 223);
+        circle(-10, 0, 2);
+        circle(8, 0, 2);
       } 
       else if (this.direccion == "IZQUIERDA") 
       {
-        //vista lateral izquierda
+        //vista lateral izquierda: franja y bandera en el chasis
         rect(0, 8, 58, 28, 2);
-        rect(-14, -19, 19, 19, 2);
         fill(60);
         circle(-23, 26, 15);
         circle(0, 26, 15);
         circle(23, 26, 15);
+        fill(116, 172, 223);
+        rect(0, 12, 58, 5);
+        this.dibujarBandera(10, 2, 10, 8);
       } 
       else 
       {
-        //vista lateral derecha (DERECHA)
+        //vista lateral derecha (DERECHA): franja (la bandera queda del otro lado)
         rect(0, 8, 58, 28, 2);
-        rect(14, -19, 19, 19, 2);
         fill(60);
         circle(-23, 26, 15);
         circle(0, 26, 15);
         circle(23, 26, 15);
+        fill(116, 172, 223);
+        rect(0, 12, 58, 5);
       }
     } 
     else 
     {
       //Astronauta según la dirección del movimiento
+      /*en bloques verdes traje naranja con casco blanco y visor negro, en bloques grises traje y 
+      casco blancos con visor dorado*/
+      let colorTraje = color(255);
+      let colorVisor = color(212, 175, 55);
+      if (this.tipoPisado == TIPO_VERDE) 
+      {
+        colorTraje = color(240, 120, 30);
+        colorVisor = color(0);
+      }
+
       rectMode(CENTER);
 
       if (this.direccion == "ARRIBA") 
       {
         //vista de espaldas: todo blanco con tanque de oxígeno como rectángulo simple
-        fill(255);
+        fill(colorTraje);
         rect(0, 16, 28, 43, 3);
+        fill(255);
         circle(0, -12, 38);
-        fill(200);
-        rect(0, 16, 18, 28, 2);
+        //con el traje naranja la espalda queda lisa, sin el tanque
+        if (this.tipoPisado != TIPO_VERDE) 
+        {
+          fill(200);
+          rect(0, 16, 18, 28, 2);
+        }
       } 
       else if (this.direccion == "IZQUIERDA") 
       {
         //vista de perfil a la izquierda: tanque lateral detrás y visor negro de costado
-        fill(200);
-        rect(13, 16, 8, 28, 2);
-        fill(255);
+        //bandera en el brazo izquierdo
+        //con el traje naranja el costado queda liso, sin el tanque
+        if (this.tipoPisado != TIPO_VERDE) 
+        {
+          fill(200);
+          rect(13, 16, 8, 28, 2);
+        }
+        fill(colorTraje);
         rect(0, 16, 24, 43, 3);
+        fill(255);
         circle(0, -12, 38);
-        fill(0);
+        fill(colorVisor);
         rect(-10, -12, 10, 18, 4);
+        this.dibujarBandera(2, 13, 7, 6);
       } 
       else if (this.direccion == "DERECHA") 
       {
         //vista de perfil a la derecha: tanque lateral detrás y visor negro de costado
-        fill(200);
-        rect(-13, 16, 8, 28, 2);
-        fill(255);
+        //con el traje naranja el costado queda liso, sin el tanque
+        if (this.tipoPisado != TIPO_VERDE) 
+        {
+          fill(200);
+          rect(-13, 16, 8, 28, 2);
+        }
+        fill(colorTraje);
         rect(0, 16, 24, 43, 3);
+        fill(255);
         circle(0, -12, 38);
-        fill(0);
+        fill(colorVisor);
         rect(10, -12, 10, 18, 4);
       } 
       else 
       {
         //vista de frente (ABAJO), tal como está originalmente
-        fill(255);
+        fill(colorTraje);
         rect(0, 16, 28, 43, 3);
+        fill(255);
         circle(0, -12, 38);
-        fill(0);
+        fill(colorVisor);
         circle(0, -12, 19);
       }
     }
 
     pop();
+  }
+
+  //método: dibuja una bandera argentina chica (celeste, blanco y celeste con sol) centrada en x_, y_
+  dibujarBandera(x_, y_, ancho_, alto_) 
+  {
+    fill(116, 172, 223);
+    rect(x_, y_, ancho_, alto_);
+    fill(255);
+    rect(x_, y_, ancho_, alto_ / 3);
+    fill(246, 180, 14);
+    circle(x_, y_, alto_ / 4);
   }
 }
 
@@ -1990,9 +2227,10 @@ class Meteorito
       juego_.resultado = "DERROTA";
       juego_.detalleResultado = "Un meteorito te impactó directamente.";
       juego_.frameDeFin = frameCount;
+      volumenMusica = 0.05;
       if (musica.isPlaying() == true) 
       {
-        musica.amp(0.05, 0.05);
+        musica.amp(volumenMusica, 0.05);
       }
     } 
     else 
@@ -2000,7 +2238,7 @@ class Meteorito
       if (frameCount - frameUltimoSonidoMeteorito >= 4) 
       {
         meteorito.pan(panorama, 0.05);
-        meteorito.play();
+        reproducirSonido(meteorito, factorVolumenPorDistancia(this.x, this.y, juego_));
         frameUltimoSonidoMeteorito = frameCount;
       }
       juego_.marcarBloqueado(this.filaObjetivo, this.columnaObjetivo);
@@ -2026,7 +2264,7 @@ class Meteorito
 
     let panorama = constrain(map(this.x, 0, 1280, -1, 1), -1, 1);
     interceptar.pan(panorama, 0.05);
-    interceptar.play();
+    reproducirSonido(interceptar, factorVolumenPorDistancia(this.x, this.y, juego));
   }
 
   //método: dibuja el rastro, el meteorito activo, y la explosión si corresponde
@@ -2273,26 +2511,56 @@ function inicializarInstrucciones()
 {
   listaInstrucciones = 
   [
-    { icono: astroIcono, texto: "Usá las flechas del teclado para mover al Astronauta.", alto: 44 },
-    { icono: miraIcono, texto: "Usá el mouse para mover la mira y disparar (mantené click para ráfaga).", alto: 44 },
-    { icono: alertaIcono, texto: "Evitá pisar los bloques rojos y grises: te van a costar O2/W.", alto: 44 },
-    { icono: saludIcono, texto: "Los bloques verdes estabilizan tu O2/W.", alto: 44 },
-    { icono: meteoritoIcono, texto: "Los meteoritos son letales si te tocan y peligrosos para la plataforma.", alto: 44 },
-    { icono: relojIcono, texto: "Sobreviví 60 segundos con O2/W mayor a cero.", alto: 44 }
+    /*movimiento.png, telescopio.png y auris.png no son cuadradas (más anchas que altas): respetarProporcion 
+    hace que se dibujen con su proporción real en vez de aplastadas en un cuadrado*/
+    { icono: astroIcono, titulo: "Movimiento", 
+    texto: "Usá las flechas para mover al astronauta/rover.", respetarProporcion: true },
+    { icono: miraIcono, titulo: "Disparo", 
+    texto: "Mové la mira con el mouse y mantené click para disparar en ráfaga.", respetarProporcion: true },
+    { icono: alertaIcono, titulo: "Bloques peligrosos", 
+    texto: "Evitá los bloques rojos y grises: consumen O2/W." },
+    { icono: saludIcono, titulo: "Bloques verdes", 
+    texto: "Estabilizan tu O2/W." },
+    { icono: meteoritoIcono, titulo: "Meteoritos", 
+    texto: "Son letales si te tocan y pueden colapsar la plataforma." },
+    { icono: relojIcono, titulo: "Objetivo", 
+    texto: "Sobreviví 60 segundos con O2/W por encima de cero." },
+    { icono: aurisIcono, titulo: "Opcional", 
+    texto: "Se recomienda usar auriculares para una mejor experiencia.", respetarProporcion: true, escala: 0.72 }
   ];
 }
 
 /*cuadro de INSTRUCCIONES: a diferencia de dibujarCuadro() (que centra todo el bloque de texto), 
-acá cada oración lleva su propio ícono a la izquierda y el texto alineado a la izquierda. El 
-"alto" de cada oración es el espacio vertical que ocupa (más grande en la primera porque es 
-la única que ocupa dos líneas)*/
+acá cada instrucción lleva su ícono y título en una línea y la explicación en la línea de abajo, 
+alineada con el título*/
 function dibujarCuadroInstrucciones() 
 {
-  let ancho = 920;
-  let alto = 300;
+  let margen = 24;
+  let separacionLineas = 24;
+  let altoInstruccion = 66;
+  let altoLinea = 22;
+  let tamañoIcono = 32;
+
+  /*el ancho del cuadro se ajusta al título o explicación más larga, así el margen lateral 
+  derecho queda igual al izquierdo y al vertical (margen)*/
+  push();
+  textSize(18);
+  let anchoContenido = 0;
+  for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
+  {
+    textFont(fuenteBoton);
+    anchoContenido = max(anchoContenido, textWidth(listaInstrucciones[i].titulo));
+    textFont(fuenteCuadro);
+    anchoContenido = max(anchoContenido, textWidth(listaInstrucciones[i].texto));
+  }
+  pop();
+  anchoContenido = ceil(anchoContenido);
+
+  let ancho = margen + tamañoIcono + 14 + anchoContenido + margen;
+  let alto = margen * 2 + (listaInstrucciones.length - 1) * altoInstruccion + separacionLineas + altoLinea;
 
   push();
-  translate(640, 310);
+  translate(640, 324);
   fill(0, 0, 0, 230);
   stroke(255, 255, 255, 40);
   strokeWeight(1);
@@ -2302,11 +2570,10 @@ function dibujarCuadroInstrucciones()
   tomaba xTexto como el centro de la caja de texto en vez de como borde izquierdo*/
   rectMode(CORNER);
 
-  let tamañoIcono = 32;
-  let xIcono = -ancho/2 + 24;
+  let xIcono = -ancho/2 + margen;
   let xTexto = xIcono + tamañoIcono + 14;
-  let anchoTexto = ancho/2 - 24 - xTexto;
-  let yCursor = -alto/2 + 26;
+  let anchoTexto = ancho/2 - margen - xTexto;
+  let yCursor = -alto/2 + margen;
 
   textFont(fuenteCuadro);
   textAlign(LEFT, TOP);
@@ -2317,10 +2584,28 @@ function dibujarCuadroInstrucciones()
 
   for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
   {
-    image(listaInstrucciones[i].icono, xIcono, yCursor, tamañoIcono, tamañoIcono);
-    describe(listaInstrucciones[i].icono.description);
-    text(listaInstrucciones[i].texto, xTexto, yCursor, anchoTexto);
-    yCursor = yCursor + listaInstrucciones[i].alto;
+    let instruccion = listaInstrucciones[i];
+    let icono = instruccion.icono;
+    let anchoIcono = tamañoIcono;
+    let altoIcono = tamañoIcono;
+    if (instruccion.respetarProporcion && icono.height > 0) 
+    {
+      //se achican un poco porque su dibujo ocupa casi todo el alto de la imagen y se veían más grandes
+      altoIcono = tamañoIcono * (instruccion.escala || 0.8);
+      anchoIcono = altoIcono * icono.width / icono.height;
+    }
+    //centrado sobre el mismo eje que los íconos de 32 px y a la altura del título
+    let xIconoCentrado = xIcono - (anchoIcono - tamañoIcono) / 2;
+    let yIcono = yCursor + altoLinea / 2 - altoIcono / 2;
+    image(icono, xIconoCentrado, yIcono, anchoIcono, altoIcono);
+    describe(icono.description);
+
+    textFont(fuenteBoton);
+    text(instruccion.titulo, xTexto, yCursor);
+
+    textFont(fuenteCuadro);
+    text(instruccion.texto, xTexto, yCursor + separacionLineas);
+    yCursor = yCursor + altoInstruccion;
   }
   pop();
 }
@@ -2357,7 +2642,7 @@ function dibujarMoneda(linea_, x_, y_)
   imageMode(CORNER);
   /*recorta los márgenes transparentes de moneda.png (la moneda ocupa solo el centro de la imagen), 
   y la dibuja con el mismo tamaño y modo que los íconos de INSTRUCCIONES*/
-  image(monedaIcono, x_ + textWidth(linea_)/2 + 6, y_ - tamañoIcono/2, tamañoIcono, tamañoIcono, 
+  image(monedaIcono, x_ + textWidth(linea_)/2 + 12, y_ - tamañoIcono/2, tamañoIcono, tamañoIcono, 
   258, 8, 564, 569);
   pop();
 }
@@ -2366,15 +2651,18 @@ function dibujarMoneda(linea_, x_, y_)
 (color de acento saturado para distinguirse de los bloques blancos)*/
 function dibujaPuntero() 
 {
+  miraX = mouseX;
+  miraY = mouseY;
+
   push();
   noFill();
   stroke(255, 100, 50, 220);
   strokeWeight(3);
-  ellipse(mouseX, mouseY, 40, 40);
+  ellipse(miraX, miraY, 40, 40);
 
   noStroke();
   fill(255, 120, 60, 230);
-  ellipse(mouseX, mouseY, 14, 14);
+  ellipse(miraX, miraY, 14, 14);
   pop();
 }
 
@@ -2389,8 +2677,9 @@ function chequearClick(x_, y_, ancho_, alto_, estadoDestino_)
 
 /*guarda un puntaje nuevo (resultado, segundos sobrevividos, O2/W final, % de plataforma intacta y 
 cantidad de meteoritos desviados) en localStorage: si ya existe un registro idéntico no lo duplica, 
-ordena por promedio (con O2/W final como desempate) de mayor a menor, conserva solo los 
-3 mejores y devuelve el puesto obtenido (0, 1 o 2) o -1 si quedó fuera*/
+ordena por promedio de mayor a menor (sin desempate: ante promedios iguales queda primero el 
+que entró antes), conserva solo los 3 mejores y devuelve el puesto obtenido (0, 1 o 2) o -1 
+si quedó fuera*/
 function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_) 
 {
   let lista = obtenerPuntajes();
@@ -2405,9 +2694,10 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     {yaExiste = true;}
   }
 
+  //el registro idéntico ya guardado conserva su puesto: el nuevo no entra al ranking
   if (yaExiste) 
   {
-    return buscarPuesto(lista, segundos_, resultado_, nivelO2W_, porcentajePlataforma_, cantidadDesviados_);
+    return -1;
   }
 
   lista.push
@@ -2419,27 +2709,16 @@ function guardarPuntaje(segundos_, resultado_, nivelO2W_, porcentajePlataforma_,
     cantidadDesviados: cantidadDesviados_
   });
 
-  /*orden principal por el promedio de O2/W, % de plataforma y meteoritos desviados; empatado, 
-  desempata el O2/W final (el objetivo central del juego); si también empata, desempata la 
-  cantidad de segundos sobrevividos para que el orden quede siempre fijo entre puntajes iguales*/
+  /*orden únicamente por el promedio (redondeado, el mismo número que se ve en PUNTAJES) de O2/W, 
+  % de plataforma y meteoritos desviados. Sin desempate: sort() mantiene el orden previo entre 
+  promedios iguales, y como el nuevo puntaje se agrega al final, el que entró primero conserva 
+  su puesto y uno igual nunca puede reemplazarlo*/
   lista.sort(function(a_, b_) 
   {
-    let promedioA = (a_.nivelO2W + a_.porcentajePlataforma + a_.cantidadDesviados) / 3;
-    let promedioB = (b_.nivelO2W + b_.porcentajePlataforma + b_.cantidadDesviados) / 3;
+    let promedioA = round((a_.nivelO2W + a_.porcentajePlataforma + a_.cantidadDesviados) / 3);
+    let promedioB = round((b_.nivelO2W + b_.porcentajePlataforma + b_.cantidadDesviados) / 3);
 
-    if (promedioB != promedioA) 
-    {
-      return promedioB - promedioA;
-    }
-    if (b_.nivelO2W != a_.nivelO2W) 
-    {
-      return b_.nivelO2W - a_.nivelO2W;
-    }
-    if (b_.segundos != a_.segundos) 
-    {
-      return b_.segundos - a_.segundos;
-    }
-    return 0;
+    return promedioB - promedioA;
   });
 
   lista = lista.slice(0, 3);
