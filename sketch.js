@@ -10,25 +10,6 @@ const CONFIG_CUBO =
   colorHorizonte: [10, 12, 24]
 };
 
-/* --- Móvil: constantes ajustables (valores en píxeles de pantalla, se pasan a 
-coordenadas de canvas con el factor de escala). No afectan el escritorio --- */
-let MIRA_VELOCIDAD_PANTALLA = 280;
-let MIRA_RADIO_PANTALLA = 28;
-let MIRA_TAMANO_PANTALLA = 28;
-let MIRA_CADENCIA_MS = 150;
-let CLAVE_MANO = "umbral_mano";
-
-/* --- Móvil: estado de pads y punteros (no se usa en escritorio) --- */
-let padPasoUsado = false;
-let idPunteroMovimiento = -1;
-let idPunteroMira = -1;
-let padMiraPresionado = false;
-let padMiraArriba = false;
-let padMiraAbajo = false;
-let padMiraIzquierda = false;
-let padMiraDerecha = false;
-let millisUltimoDesvioMovil = 0;
-
 //[CUBO] Capa gráfica cacheada (p5.Graphics) para pre-renderizar los cubos con cero costo por frame
 let bufferPlataforma;
 
@@ -202,18 +183,15 @@ document.addEventListener("visibilitychange", function()
 el canvas sincroniza su tamaño y se asegura de que el audio siga activo*/
 document.addEventListener("fullscreenchange", function() 
 {
-  if (esTelefonoHorizontal() == false && esTelefonoVertical() == false) 
+  if (document.fullscreenElement == null) 
   {
-    if (document.fullscreenElement == null) 
-    {
-      lienzo.elt.style.width = "";
-      lienzo.elt.style.height = "";
-    } 
-    else 
-    {
-      lienzo.elt.style.width = "100vw";
-      lienzo.elt.style.height = "100vh";
-    }
+    lienzo.elt.style.width = "";
+    lienzo.elt.style.height = "";
+  } 
+  else 
+  {
+    lienzo.elt.style.width = "100vw";
+    lienzo.elt.style.height = "100vh";
   }
 
   if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
@@ -249,7 +227,6 @@ function preload()
 function setup() 
 {
   lienzo = createCanvas(1280, 720).parent('contenedorCanva');
-  aplicarPixelDensityMovil();
   noCursor();
 
   inicializarColoresBloques();
@@ -265,9 +242,6 @@ function setup()
 
   //[CUBO] Inicializa la capa gráfica cacheada de la plataforma de cubos
   crearBufferPlataforma();
-
-  aplicarPixelDensityMovil();
-  inicializarMovil();
 
   outputVolume(0.7);
   musica.setLoop(true);
@@ -722,17 +696,6 @@ function draw()
     }
   }
 
-  /*teléfono en vertical: el modal HTML cubre la pantalla y la partida no avanza 
-  (se corre frameDeInicio para que el cronómetro no gaste tiempo oculto)*/
-  if (esTelefonoVertical() == true) 
-  {
-    if (juego != undefined && estado == ESTADO_JUEGO && juego.resultado == "") 
-    {
-      juego.frameDeInicio = juego.frameDeInicio + 1;
-    }
-    return;
-  }
-
   //efecto de interferencia en la música cuando el astronauta está atrapado (rover)
   if (interferenciaActiva == true && musica.isPlaying() == true) 
   {
@@ -803,8 +766,6 @@ function draw()
     duracionTramoInterferencia = 0;
     duracionCorteEstatica = 0;
   }
-
-  limpiarPasoPadMovimientoMovil();
 
   switch(estado) 
   {
@@ -992,16 +953,8 @@ function draw()
       if (juego.resultado == "") 
       {
         juego.astronauta.actualizar(juego);
-        limpiarPasoPadMovimientoMovil();
         juego.actualizarMeteoritos(framesTranscurridos);
-        if (esTelefonoHorizontal() == true) 
-        {
-          actualizarDisparoMovil();
-        } 
-        else 
-        {
-          juego.actualizarDisparo();
-        }
+        juego.actualizarDisparo();
         juego.satelite.dibujar(framesTranscurridos);
         juego.sonda.dibujar(framesTranscurridos);
 
@@ -1199,7 +1152,6 @@ function draw()
   }
 
   dibujaPuntero();
-  limpiarPasoPadMovimientoMovil();
 }
 
 //se llama una única vez por click (sirve para los botones del menú)
@@ -1299,8 +1251,6 @@ function windowResized()
   {
     generarPlataformaCubo();
   }
-  aplicarPixelDensityMovil();
-  actualizarOrientacionMovil();
 }
 
 //Programación Orientada a Objetos con Inteligencia Artificial
@@ -3019,34 +2969,18 @@ function dibujarMoneda(linea_, x_, y_)
 (color de acento saturado para distinguirse de los bloques blancos)*/
 function dibujaPuntero() 
 {
-  if (esTelefonoHorizontal() == false && esTelefonoVertical() == false) 
-  {
-    miraX = mouseX;
-    miraY = mouseY;
-  }
-
-  let diametroHalo = 40;
-  let diametroCentro = 14;
-  if (esTelefonoHorizontal() == true) 
-  {
-    let escala = factorEscalaCanvas();
-    diametroHalo = MIRA_TAMANO_PANTALLA * escala;
-    if (diametroHalo < 24 * escala) 
-    {
-      diametroHalo = 24 * escala;
-    }
-    diametroCentro = diametroHalo * 0.35;
-  }
+  miraX = mouseX;
+  miraY = mouseY;
 
   push();
   noFill();
   stroke(255, 100, 50, 220);
   strokeWeight(3);
-  ellipse(miraX, miraY, diametroHalo, diametroHalo);
+  ellipse(miraX, miraY, 40, 40);
 
   noStroke();
   fill(255, 120, 60, 230);
-  ellipse(miraX, miraY, diametroCentro, diametroCentro);
+  ellipse(miraX, miraY, 14, 14);
   pop();
 }
 
@@ -3172,483 +3106,4 @@ function obtenerPuntajes()
   {
     return [];
   }
-}
-
-//Móvil: detección, modal, pads y mira. No altera el disparo de escritorio.
-
-function esTelefonoVertical() 
-{
-  return window.matchMedia("(pointer: coarse) and (orientation: portrait) and (max-width: 500px)").matches;
-}
-
-function esTelefonoHorizontal() 
-{
-  return window.matchMedia("(pointer: coarse) and (orientation: landscape) and (max-height: 500px)").matches;
-}
-
-function esTelefono() 
-{
-  if (esTelefonoVertical() == true || esTelefonoHorizontal() == true) 
-  {
-    return true;
-  }
-  return false;
-}
-
-function aplicarPixelDensityMovil() 
-{
-  if (esTelefono() == true) 
-  {
-    pixelDensity(1);
-  }
-}
-
-function factorEscalaCanvas() 
-{
-  if (lienzo == undefined || lienzo.elt == undefined) 
-  {
-    return 1;
-  }
-  let anchoMostrado = lienzo.elt.clientWidth;
-  if (anchoMostrado <= 0) 
-  {
-    return 1;
-  }
-  return width / anchoMostrado;
-}
-
-function leerManoGuardada() 
-{
-  let mano = localStorage.getItem(CLAVE_MANO);
-  if (mano != "zurdo") 
-  {
-    return "diestro";
-  }
-  return "zurdo";
-}
-
-function aplicarMano(mano_) 
-{
-  let mano = mano_;
-  if (mano != "zurdo") 
-  {
-    mano = "diestro";
-  }
-  localStorage.setItem(CLAVE_MANO, mano);
-  document.body.classList.remove("mano-diestro");
-  document.body.classList.remove("mano-zurdo");
-  document.body.classList.add("mano-" + mano);
-
-  let btnZurdo = document.querySelector("#btnZurdo");
-  let btnDiestro = document.querySelector("#btnDiestro");
-  if (btnZurdo != null) 
-  {
-    btnZurdo.classList.remove("seleccionado");
-  }
-  if (btnDiestro != null) 
-  {
-    btnDiestro.classList.remove("seleccionado");
-  }
-  if (mano == "zurdo" && btnZurdo != null) 
-  {
-    btnZurdo.classList.add("seleccionado");
-  }
-  if (mano == "diestro" && btnDiestro != null) 
-  {
-    btnDiestro.classList.add("seleccionado");
-  }
-}
-
-function actualizarOrientacionMovil() 
-{
-  aplicarPixelDensityMovil();
-  idPunteroMovimiento = -1;
-  idPunteroMira = -1;
-  padMiraPresionado = false;
-  padMiraArriba = false;
-  padMiraAbajo = false;
-  padMiraIzquierda = false;
-  padMiraDerecha = false;
-  if (esTelefonoHorizontal() == true)
-  {
-    miraX = width / 2;
-    miraY = height / 2;
-  }
-}
-
-function limpiarPasoPadMovimientoMovil() 
-{
-  if (padPasoUsado == false) 
-  {
-    return;
-  }
-  teclaArribaPresionada = false;
-  teclaAbajoPresionada = false;
-  teclaIzquierdaPresionada = false;
-  teclaDerechaPresionada = false;
-  padPasoUsado = false;
-}
-
-function radioAciertoMovil() 
-{
-  return MIRA_RADIO_PANTALLA * factorEscalaCanvas();
-}
-
-function intentarDesvioMovil() 
-{
-  if (juego == undefined || estado != ESTADO_JUEGO || juego.resultado != "") 
-  {
-    return;
-  }
-  if (millis() - millisUltimoDesvioMovil < MIRA_CADENCIA_MS) 
-  {
-    return;
-  }
-
-  let radio = radioAciertoMovil();
-  for (let i = 0; i < juego.meteoritos.length; i = i + 1) 
-  {
-    let m = juego.meteoritos[i];
-    if (m.activo == true && m.desviado == false && dist(m.x, m.y, miraX, miraY) < radio) 
-    {
-      m.interceptar();
-      juego.cantidadDesviados = juego.cantidadDesviados + 1;
-      disparoX = m.x;
-      disparoY = m.y;
-      frameDisparo = frameCount;
-      millisUltimoDesvioMovil = millis();
-      break;
-    }
-  }
-}
-
-function actualizarDisparoMovil() 
-{
-  if (padMiraPresionado == true) 
-  {
-    let dirX = 0;
-    let dirY = 0;
-    if (padMiraIzquierda == true) 
-    {
-      dirX = dirX - 1;
-    }
-    if (padMiraDerecha == true) 
-    {
-      dirX = dirX + 1;
-    }
-    if (padMiraArriba == true) 
-    {
-      dirY = dirY - 1;
-    }
-    if (padMiraAbajo == true) 
-    {
-      dirY = dirY + 1;
-    }
-
-    if (dirX != 0 || dirY != 0) 
-    {
-      let largo = Math.sqrt(dirX * dirX + dirY * dirY);
-      let dt = deltaTime;
-      if (dt > 50) 
-      {
-        dt = 50;
-      }
-      let velocidad = MIRA_VELOCIDAD_PANTALLA * factorEscalaCanvas() * (dt / 1000);
-      miraX = miraX + (dirX / largo) * velocidad;
-      miraY = miraY + (dirY / largo) * velocidad;
-      if (miraX < 0) 
-      {
-        miraX = 0;
-      }
-      if (miraX > width) 
-      {
-        miraX = width;
-      }
-      if (miraY < 0) 
-      {
-        miraY = 0;
-      }
-      if (miraY > height) 
-      {
-        miraY = height;
-      }
-    }
-
-    intentarDesvioMovil();
-  }
-}
-
-function direccionPadDesdeEvento(pad_, evento_, permitirDiagonal_) 
-{
-  let caja = pad_.getBoundingClientRect();
-  let dx = evento_.clientX - (caja.left + caja.width / 2);
-  let dy = evento_.clientY - (caja.top + caja.height / 2);
-  let zona = 16;
-  let arriba = false;
-  let abajo = false;
-  let izquierda = false;
-  let derecha = false;
-
-  if (permitirDiagonal_ == true) 
-  {
-    if (dy < -zona) 
-    {
-      arriba = true;
-    }
-    if (dy > zona) 
-    {
-      abajo = true;
-    }
-    if (dx < -zona) 
-    {
-      izquierda = true;
-    }
-    if (dx > zona) 
-    {
-      derecha = true;
-    }
-  } 
-  else 
-  {
-    if (Math.abs(dx) > zona || Math.abs(dy) > zona) 
-    {
-      if (Math.abs(dx) >= Math.abs(dy)) 
-      {
-        if (dx < 0) 
-        {
-          izquierda = true;
-        } 
-        else 
-        {
-          derecha = true;
-        }
-      } 
-      else 
-      {
-        if (dy < 0) 
-        {
-          arriba = true;
-        } 
-        else 
-        {
-          abajo = true;
-        }
-      }
-    }
-  }
-
-  return [arriba, abajo, izquierda, derecha];
-}
-
-function aplicarPasoMovimientoPad(dirs_) 
-{
-  teclaArribaPresionada = false;
-  teclaAbajoPresionada = false;
-  teclaIzquierdaPresionada = false;
-  teclaDerechaPresionada = false;
-  if (dirs_[0] == true) 
-  {
-    teclaArribaPresionada = true;
-  }
-  if (dirs_[1] == true) 
-  {
-    teclaAbajoPresionada = true;
-  }
-  if (dirs_[2] == true) 
-  {
-    teclaIzquierdaPresionada = true;
-  }
-  if (dirs_[3] == true) 
-  {
-    teclaDerechaPresionada = true;
-  }
-  padPasoUsado = true;
-}
-
-function aplicarDireccionMiraPad(dirs_) 
-{
-  padMiraArriba = dirs_[0];
-  padMiraAbajo = dirs_[1];
-  padMiraIzquierda = dirs_[2];
-  padMiraDerecha = dirs_[3];
-}
-
-function inicializarPad(pad_, esMira_) 
-{
-  if (pad_ == null) 
-  {
-    return;
-  }
-
-  pad_.addEventListener("contextmenu", function(evento_) 
-  {
-    evento_.preventDefault();
-  });
-
-  pad_.addEventListener("pointerdown", function(evento_) 
-  {
-    evento_.preventDefault();
-    evento_.stopPropagation();
-    if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
-    {
-      getAudioContext().resume();
-    }
-
-    if (esMira_ == true) 
-    {
-      if (idPunteroMira != -1) 
-      {
-        return;
-      }
-      idPunteroMira = evento_.pointerId;
-      pad_.setPointerCapture(evento_.pointerId);
-      intentarDesvioMovil();
-      padMiraPresionado = true;
-      aplicarDireccionMiraPad(direccionPadDesdeEvento(pad_, evento_, true));
-    } 
-    else 
-    {
-      if (idPunteroMovimiento != -1) 
-      {
-        return;
-      }
-      idPunteroMovimiento = evento_.pointerId;
-      pad_.setPointerCapture(evento_.pointerId);
-      aplicarPasoMovimientoPad(direccionPadDesdeEvento(pad_, evento_, false));
-    }
-  });
-
-  pad_.addEventListener("pointermove", function(evento_) 
-  {
-    if (esMira_ == true) 
-    {
-      if (evento_.pointerId != idPunteroMira) 
-      {
-        return;
-      }
-      evento_.preventDefault();
-      aplicarDireccionMiraPad(direccionPadDesdeEvento(pad_, evento_, true));
-    }
-  });
-
-  pad_.addEventListener("pointerup", function(evento_) 
-  {
-    if (esMira_ == true) 
-    {
-      if (evento_.pointerId != idPunteroMira) 
-      {
-        return;
-      }
-      idPunteroMira = -1;
-      padMiraPresionado = false;
-      padMiraArriba = false;
-      padMiraAbajo = false;
-      padMiraIzquierda = false;
-      padMiraDerecha = false;
-    } 
-    else 
-    {
-      if (evento_.pointerId != idPunteroMovimiento) 
-      {
-        return;
-      }
-      idPunteroMovimiento = -1;
-    }
-  });
-
-  pad_.addEventListener("pointercancel", function(evento_) 
-  {
-    if (esMira_ == true) 
-    {
-      if (evento_.pointerId != idPunteroMira) 
-      {
-        return;
-      }
-      idPunteroMira = -1;
-      padMiraPresionado = false;
-      padMiraArriba = false;
-      padMiraAbajo = false;
-      padMiraIzquierda = false;
-      padMiraDerecha = false;
-    } 
-    else 
-    {
-      if (evento_.pointerId != idPunteroMovimiento) 
-      {
-        return;
-      }
-      idPunteroMovimiento = -1;
-    }
-  });
-}
-
-function inicializarMovil() 
-{
-  aplicarMano(leerManoGuardada());
-
-  let btnZurdo = document.querySelector("#btnZurdo");
-  let btnDiestro = document.querySelector("#btnDiestro");
-  if (btnZurdo != null) 
-  {
-    btnZurdo.addEventListener("click", function() 
-    {
-      aplicarMano("zurdo");
-    });
-  }
-  if (btnDiestro != null) 
-  {
-    btnDiestro.addEventListener("click", function() 
-    {
-      aplicarMano("diestro");
-    });
-  }
-
-  let btnInfo = document.querySelector("#btnInfo");
-  let modalInfo = document.querySelector("#modalInfo");
-  let btnCerrarInfo = document.querySelector("#btnCerrarInfo");
-  if (btnInfo != null && modalInfo != null) 
-  {
-    btnInfo.addEventListener("click", function() 
-    {
-      modalInfo.classList.add("abierto");
-    });
-  }
-  if (btnCerrarInfo != null && modalInfo != null) 
-  {
-    btnCerrarInfo.addEventListener("click", function() 
-    {
-      modalInfo.classList.remove("abierto");
-    });
-  }
-
-  inicializarPad(document.querySelector("#padMovimiento"), false);
-  inicializarPad(document.querySelector("#padMira"), true);
-
-  if (lienzo != undefined && lienzo.elt != undefined) 
-  {
-    lienzo.elt.addEventListener("contextmenu", function(evento_) 
-    {
-      evento_.preventDefault();
-    });
-  }
-
-  let uiMovil = document.querySelector("#uiMovil");
-  if (uiMovil != null) 
-  {
-    uiMovil.addEventListener("contextmenu", function(evento_) 
-    {
-      evento_.preventDefault();
-    });
-  }
-
-  if (window.matchMedia) 
-  {
-    let consultaHorizontal = window.matchMedia("(orientation: landscape)");
-    if (consultaHorizontal.addEventListener) 
-    {
-      consultaHorizontal.addEventListener("change", actualizarOrientacionMovil);
-    }
-  }
-
-  actualizarOrientacionMovil();
 }
