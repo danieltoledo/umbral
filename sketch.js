@@ -1,3 +1,18 @@
+//[CUBO] Parámetros configurables del sistema de cubos sólidos pseudo-3D
+const CONFIG_CUBO = 
+{
+  altoTapa: 0.35,
+  inclinacionLateral: 8,
+  brilloTapa: 0.22,
+  oscuridadLateral: 0.22,
+  alphaSombra: 55,
+  grosorSombra: 5,
+  colorHorizonte: [10, 12, 24]
+};
+
+//[CUBO] Capa gráfica cacheada (p5.Graphics) para pre-renderizar los cubos con cero costo por frame
+let bufferPlataforma;
+
 /*Tipos de bloque de la plataforma, no hay bloque dado que no se puede pisar ni hay 
 superficie ahí (define el "hueco" de la pirámide y los bordes de cada fila)*/
 let TIPO_VACIO = 0; 
@@ -225,6 +240,9 @@ function setup()
   redibujarNebulosa();
   redibujarEstrellas();
 
+  //[CUBO] Inicializa la capa gráfica cacheada de la plataforma de cubos
+  crearBufferPlataforma();
+
   outputVolume(0.7);
   musica.setLoop(true);
   musica.amp(0.3);
@@ -239,6 +257,9 @@ function setup()
   ruidoInterferencia.start();
 
   juego = new Juego();
+
+  //[CUBO] Pre-renderiza la plataforma de cubos en la capa cacheada
+  generarPlataformaCubo();
 }
 
 /*reproduce un efecto de sonido usando su mismo buffer y su misma salida (volumen y paneo 
@@ -368,7 +389,8 @@ function generarEstrellas()
     let rVerde = floor(random(215, 255));
     let rAzul = floor(random(230, 255));
 
-    estrellas.push({
+    estrellas.push
+    ({
       x: random(-40, width + 40),
       y: random(-40, height + 40),
       radio: esDestacada ? random(2.2, 3.0) : random(1.4, 2.0),
@@ -858,12 +880,13 @@ function draw()
       push();
       textFont(fuenteCuadro);
       textSize(18);
+      let anchoNumero = max(textWidth("1. "), textWidth("2. "), textWidth("3. "));
       let anchoContenido = textWidth("MEJORES PUNTAJES");
       //ancho del bloque de líneas (con su ícono de moneda), para centrarlo como un todo
       let anchoLineas = 0;
       for (let i = 0; i < 3; i = i + 1) 
       {
-        let anchoLinea = textWidth(lineasPuntajes[i]);
+        let anchoLinea = anchoNumero + textWidth(lineasPuntajes[i].substring(3));
         if (listaPuntajes[i] != undefined && listaPuntajes[i].resultado != "") 
         {
           anchoLinea = anchoLinea + 32 + 12;
@@ -884,17 +907,24 @@ function draw()
       push();
       textFont(fuenteCuadro);
       textSize(18);
+      /*el 1 es más angosto que el 2 y el 3 en la fuente, por eso la oración que le seguía 
+      arrancaba a distinto x: los números se dibujan aparte en su propia columna y las 
+      oraciones quedan todas alineadas desde el mismo x*/
       textAlign(LEFT, CENTER);
       fill(255);
       noStroke();
       for (let i = 0; i < 3; i = i + 1) 
       {
-        text(lineasPuntajes[i], xInicioLineas, 302 + i * 44);
+        //el número arranca en el mismo x que los demás y el punto va pegado a él
+        text(i + 1, xInicioLineas, 302 + i * 44);
+        text(". ", xInicioLineas + textWidth(i + 1), 302 + i * 44);
+        text(lineasPuntajes[i].substring(3), xInicioLineas + anchoNumero, 302 + i * 44);
 
         if (listaPuntajes[i] != undefined && listaPuntajes[i].resultado != "") 
         {
           //dibujarMoneda() toma x_ como el centro de la línea
-          dibujarMoneda(lineasPuntajes[i], xInicioLineas + textWidth(lineasPuntajes[i])/2, 302 + i * 44);
+          dibujarMoneda(lineasPuntajes[i].substring(3), xInicioLineas + anchoNumero +
+          textWidth(lineasPuntajes[i].substring(3))/2, 302 + i * 44);
         }
       }
       pop();
@@ -970,7 +1000,19 @@ function draw()
         }
       }
 
-      juego.dibujarPlataforma();
+      //[CUBO] Durante la vibración de impacto (6 frames) se dibuja dinámicamente; luego se usa la capa pre-renderizada
+      if (frameCount - juego.frameVibra < 6) 
+      {
+        juego.dibujarPlataforma();
+      } 
+      else if (bufferPlataforma) 
+      {
+        image(bufferPlataforma, 0, 0);
+      } 
+      else 
+      {
+        juego.dibujarPlataforma();
+      }
       juego.astronauta.dibujar();
       juego.dibujarMeteoritos();
 
@@ -1202,6 +1244,15 @@ function mousePressed()
   }
 }
 
+//[CUBO] Regenera la capa cacheada si cambia el tamaño de la ventana
+function windowResized() 
+{
+  if (typeof generarPlataformaCubo === "function") 
+  {
+    generarPlataformaCubo();
+  }
+}
+
 //Programación Orientada a Objetos con Inteligencia Artificial
 
 //Clases
@@ -1213,13 +1264,20 @@ class Juego
     //propiedades de la plataforma
     this.tamañoBloque = 45;
     this.cantidadColumnas = 26;
-    this.cantidadFilasPlataforma = 8;
+    //[CUBO] 6 filas para no superar la mitad de la pantalla (y <= 360)
+    this.cantidadFilasPlataforma = 6;
     this.cantidadActivaInicial = 26;
     this.decrementoPorFila = 2;
     this.centroXPlataforma = 640;
     this.centroYPlataforma = 720;
     this.filas = [];
     this.generarFilas();
+
+    /*vibración localizada: celda (fila y columna) del último impacto y frame en que ocurrió, 
+    para sacudir solo esa celda y al personaje si está cerca durante unos pocos frames*/
+    this.filaVibra = 0;
+    this.columnaVibra = 0;
+    this.frameVibra = -100;
 
     /*arrays reutilizables para obtenerCeldaActivaAlAzar() y obtenerCeldaGrisClaroAlAzar(): 
     se vacían con .length = 0 y se llenan de nuevo sobre el mismo array. Se usan pares 
@@ -1304,6 +1362,12 @@ class Juego
     }
 
     this.garantizarVerde();
+
+    //[CUBO] Actualiza la plataforma de cubos si se regeneran las filas
+    if (typeof generarPlataformaCubo === "function") 
+    {
+      generarPlataformaCubo();
+    }
   }
 
   //método: si ningún bloque salió verde al azar, fuerza uno para que siempre haya al menos uno
@@ -1365,6 +1429,21 @@ class Juego
     this.proximoFrameDisparo = 0;
     this.cantidadDesviados = 0;
     this.astronauta = new Astronauta(floor(this.cantidadColumnas / 2), this);
+
+    //[CUBO] Sincroniza la plataforma de cubos con la nueva partida
+    if (typeof generarPlataformaCubo === "function") 
+    {
+      generarPlataformaCubo();
+    }
+  }
+
+  //[CUBO] Devuelve la coordenada Y de la superficie (tapa superior) de una fila
+  obtenerYFila(fila_) 
+  {
+    let W = this.tamañoBloque;
+    let altoTapa = round(W * CONFIG_CUBO.altoTapa);
+    let paso = W + altoTapa;
+    return this.centroYPlataforma - (fila_ - 1) * paso - W;
   }
 
   /*método: crea de una vez un lote fijo de meteoritos "apagados" (activo: false), muy por 
@@ -1380,21 +1459,14 @@ class Juego
     }
   }
 
-  /*método: dibuja todas las filas de la plataforma. stroke/strokeWeight/rectMode se fijan acá 
-  una sola vez para toda la plataforma*/
+  /*[CUBO] Dibuja todas las filas de la plataforma con cubos pseudo-3D,
+  recorriendo de la más lejana (arriba) a la más cercana (abajo) para oclusión correcta*/
   dibujarPlataforma() 
   {
-    push();
-    stroke(0);
-    strokeWeight(2);
-    rectMode(CENTER);
-
-    for (let i = 0; i < this.filas.length; i = i + 1) 
+    for (let i = this.filas.length - 1; i >= 0; i = i - 1) 
     {
       this.filas[i].dibujar();
     }
-
-    pop();
   }
 
   //método: devuelve el número de fila (superficie) más alto activo para una columna dada
@@ -1532,6 +1604,16 @@ class Juego
     }
 
     this.filas[fila_ - 1].bloques[columna_] = TIPO_GRIS_OSCURO;
+
+    this.filaVibra = fila_;
+    this.columnaVibra = columna_;
+    this.frameVibra = frameCount;
+
+    // [CUBO] Actualiza la plataforma al bloquearse una celda
+    if (typeof generarPlataformaCubo === "function") 
+    {
+      generarPlataformaCubo();
+    }
   }
 
   /*método: agota un bloque verde puntual (pasa a gris claro, como la Luna) y lo reubica en 
@@ -1545,6 +1627,12 @@ class Juego
     if (celdaNueva[0] != -1) 
     {
       this.filas[celdaNueva[0] - 1].bloques[celdaNueva[1]] = TIPO_VERDE;
+    }
+
+    // [CUBO] Actualiza la plataforma al reubicarse el bloque verde
+    if (typeof generarPlataformaCubo === "function") 
+    {
+      generarPlataformaCubo();
     }
   }
 
@@ -1740,22 +1828,75 @@ class Fila
     }
   }
 
-  //método: dibuja esta fila
+  //[CUBO] Dibuja esta fila como cubos sólidos pseudo-3D
   dibujar() 
   {
-    /*bucle de recorrido: recorre las columnas ya construidas y dibuja cada bloque activo. 
-    stroke/strokeWeight/rectMode ya vienen fijados una sola vez desde dibujarPlataforma(), 
-    así que acá solo se cambia el fill (que sí varía por bloque) y se dibuja el rect*/
+    let W = this.tamañoBloque;
+    let altoTapa = round(W * CONFIG_CUBO.altoTapa);
+    let paso = W + altoTapa;
+    let yFront = this.centroY - (this.numeroDeFila - 1) * paso - W;
+    let yTapa = yFront - altoTapa;
+    let totalFilas = juego ? juego.filas.length : 8;
+    let factorAtm = (this.numeroDeFila - 1) / (totalFilas - 1);
+    let cHorizonte = color(CONFIG_CUBO.colorHorizonte[0], CONFIG_CUBO.colorHorizonte[1], CONFIG_CUBO.colorHorizonte[2]);
+
+    noStroke();
+
     for (let columna = 0; columna < this.cantidadColumnas; columna = columna + 1) 
     {
       if (this.bloques[columna] != TIPO_VACIO) 
       {
-        let posX = this.centroX - (this.cantidadColumnas * this.tamañoBloque) / 2 + 
-        (columna + 0.5) * this.tamañoBloque;
-        let posY = this.centroY - this.tamañoBloque / 2 - (this.numeroDeFila - 1) * this.tamañoBloque;
+        let posX = this.centroX - (this.cantidadColumnas * W) / 2 + columna * W;
 
-        fill(colorDeTipo(this.bloques[columna]));
-        rect(posX, posY, this.tamañoBloque, this.tamañoBloque);
+        // Vibración de impacto
+        let distanciaVibra = abs(juego.filaVibra - this.numeroDeFila) + abs(juego.columnaVibra - columna);
+        let vibraX = 0;
+        let vibraY = 0;
+        if (frameCount - juego.frameVibra < 6 && distanciaVibra < 4) 
+        {
+          let intensidadVibra = 1 - distanciaVibra / 4;
+          vibraX = random(-5, 5) * intensidadVibra;
+          vibraY = random(-4, 4) * intensidadVibra;
+        }
+
+        let cBase = colorDeTipo(this.bloques[columna]);
+        let cBaseAtm = lerpColor(cBase, cHorizonte, factorAtm * 0.45);
+        let cFrontal = cBaseAtm;
+        let factorBrilloTapa = CONFIG_CUBO.brilloTapa * (1 - factorAtm * 0.35);
+        let cTapa = lerpColor(cBaseAtm, color(255), factorBrilloTapa);
+        let factorOscuridadLat = CONFIG_CUBO.oscuridadLateral * (1 - factorAtm * 0.35);
+        let cLateral = lerpColor(cBaseAtm, color(0), factorOscuridadLat);
+
+        let esExtremoIzq = (columna == this.columnaInicio);
+        let esExtremoDer = (columna == this.columnaFin - 1);
+        let incLat = CONFIG_CUBO.inclinacionLateral;
+
+        let xTL = posX + vibraX + (esExtremoIzq ? incLat : 0);
+        let xTR = posX + W + vibraX - (esExtremoDer ? incLat : 0);
+        let xBL = posX + vibraX;
+        let xBR = posX + W + vibraX;
+
+        // 1. Cara frontal (cuadrado)
+        fill(cFrontal);
+        rect(posX + vibraX, yFront + vibraY, W, W);
+
+        // 2. Tapa superior (techo recto al centro, inclinado en celdas laterales finales)
+        fill(cTapa);
+        quad(xTL, yTapa + vibraY, xTR, yTapa + vibraY, xBR, yFront + vibraY, xBL, yFront + vibraY);
+
+        // 3. Aristas de 1 px
+        fill(lerpColor(cTapa, color(255), 0.3));
+        rect(xTL, yTapa + vibraY, xTR - xTL, 1);
+        if (esExtremoIzq) 
+        {
+          quad(xBL, yFront + vibraY, xBL + 1, yFront + vibraY, xTL + 1, yTapa + vibraY, xTL, yTapa + vibraY);
+        }
+        if (esExtremoDer) 
+        {
+          quad(xBR - 1, yFront + vibraY, xBR, yFront + vibraY, xTR, yTapa + vibraY, xTR - 1, yTapa + vibraY);
+        }
+        fill(lerpColor(cFrontal, color(0), 0.35));
+        rect(posX + vibraX, yFront + W - 1 + vibraY, W, 1);
       }
     }
   }
@@ -1876,7 +2017,7 @@ class Astronauta
 
     let tipoDestino = juego_.obtenerTipoDeCelda(filaDeseada, columnaDeseada);
 
-    //no se puede pisar un bloque bloqueado
+    //no se puede pisar una celda bloqueada (gris oscuro) ni vacía (fuera de la pirámide)
     if (tipoDestino != TIPO_GRIS_OSCURO && tipoDestino != TIPO_VACIO) 
     {
       this.columna = columnaDeseada;
@@ -1891,7 +2032,8 @@ class Astronauta
     this.x = juego_.centroXPlataforma - (juego_.cantidadColumnas * juego_.tamañoBloque) / 2 + 
     (this.columna + 0.5) * juego_.tamañoBloque;
 
-    this.y = juego_.centroYPlataforma - this.fila * juego_.tamañoBloque;
+    //[CUBO] Asienta al astronauta sobre la tapa superior del cubo
+    this.y = juego_.obtenerYFila(this.fila);
   }
 
   //método: aplica el descuento de O2/W según el bloque pisado y cuánto tiempo lleva ahí
@@ -1963,8 +2105,27 @@ class Astronauta
   al traje del bloque que pisa*/
   dibujar() 
   {
+    //sombra de contacto sobre la superficie, para asentar al personaje en la plataforma
     push();
-    translate(this.x, this.y - 18);
+    noStroke();
+    fill(0, 0, 0, 90);
+    ellipse(this.x, this.y - 3, 34, 8);
+    pop();
+
+    /*vibración breve en función de la distancia al impacto: máxima en su celda y menor 
+    cuanto más lejos, hasta desaparecer a 4 columnas*/
+    let vibraX = 0;
+    let vibraY = 0;
+    let distanciaVibra = abs(juego.columnaVibra - this.columna);
+    if (frameCount - juego.frameVibra < 8 && distanciaVibra < 4) 
+    {
+      let intensidadVibra = 1 - distanciaVibra / 4;
+      vibraX = random(-3, 3) * intensidadVibra;
+      vibraY = random(-2, 2) * intensidadVibra;
+    }
+
+    push();
+    translate(this.x + vibraX, this.y - 18 + vibraY);
     noStroke();
 
     if (this.atrapado == true || this.tipoPisado == TIPO_ROJO) 
@@ -2132,7 +2293,7 @@ class Meteorito
     this.frameDeExplosion = 0;
     this.x = 0;
     this.y = 0;
-    this.velocidadY = 3;
+    this.velocidadY = 3.5;
     this.radio = 22;
 
     //rastro: dos arrays paralelos con las posiciones anteriores (en vez de un array de objetos)
@@ -2153,7 +2314,7 @@ class Meteorito
     this.activo = true;
     this.desviado = false;
     this.velocidadX = 0;
-    this.velocidadY = 3;
+    this.velocidadY = 3.5;
 
     let celda = juego_.obtenerCeldaActivaAlAzar();
     this.filaObjetivo = celda[0];
@@ -2163,7 +2324,8 @@ class Meteorito
     (this.columnaObjetivo + 0.5) * juego_.tamañoBloque;
 
     this.y = -20;
-    this.yObjetivo = juego_.centroYPlataforma - this.filaObjetivo * juego_.tamañoBloque;
+    //[CUBO] El meteorito impacta sobre la tapa superior del cubo objetivo
+    this.yObjetivo = juego_.obtenerYFila(this.filaObjetivo);
 
     //vacía el rastro reutilizando el mismo array (en vez de crear uno nuevo cada vez)
     this.rastroX.length = 0;
@@ -2226,6 +2388,9 @@ class Meteorito
       muerteSer.play();
       juego_.resultado = "DERROTA";
       juego_.detalleResultado = "Un meteorito te impactó directamente.";
+      juego_.filaVibra = this.filaObjetivo;
+      juego_.columnaVibra = this.columnaObjetivo;
+      juego_.frameVibra = frameCount;
       juego_.frameDeFin = frameCount;
       volumenMusica = 0.05;
       if (musica.isPlaying() == true) 
@@ -2274,6 +2439,15 @@ class Meteorito
     {
       push();
       noStroke();
+
+      /*sombra en la celda objetivo: crece y se oscurece a medida que el meteorito se acerca, 
+      así se lee la profundidad y se anticipa dónde va a caer (no cambia la caída)*/
+      if (this.desviado == false) 
+      {
+        let cercania = constrain(map(this.y, -20, this.yObjetivo, 0, 1), 0, 1);
+        fill(0, 0, 0, 30 + cercania * 90);
+        ellipse(this.x, this.yObjetivo - 3, 10 + cercania * 26, 3 + cercania * 6);
+      }
 
       /*el alfa de cada segmento del rastro depende de su posición en la cola y cambia todo 
       el tiempo, así que se dibuja directo con el contexto nativo (mismo criterio que 
@@ -2398,6 +2572,139 @@ class Sonda
 }
 
 //Funciones auxiliares
+
+//[CUBO] Inicializa el buffer offscreen para pre-renderizar los cubos sólidos
+function crearBufferPlataforma() 
+{
+  bufferPlataforma = createGraphics(width, height);
+  bufferPlataforma.pixelDensity(pixelDensity());
+}
+
+//[CUBO] Pre-renderiza la pirámide de cubos pseudo-3D sólidos en la capa cacheada
+function generarPlataformaCubo() 
+{
+  if (!bufferPlataforma || !juego || !juego.filas || juego.filas.length == 0) 
+  {
+    return;
+  }
+
+  bufferPlataforma.clear();
+  bufferPlataforma.noStroke();
+
+  let filas = juego.filas;
+  let totalFilas = filas.length;
+  let W = juego.tamañoBloque;
+  let Ncols = juego.cantidadColumnas;
+  let centroX = juego.centroXPlataforma;
+  let centroY = juego.centroYPlataforma;
+
+  let altoTapa = round(W * CONFIG_CUBO.altoTapa);
+  let paso = W + altoTapa;
+  let grosorSombra = CONFIG_CUBO.grosorSombra;
+  let alphaSombra = CONFIG_CUBO.alphaSombra;
+  let cHorizonte = color(CONFIG_CUBO.colorHorizonte[0], CONFIG_CUBO.colorHorizonte[1], CONFIG_CUBO.colorHorizonte[2]);
+
+  //[CUBO] Orden de dibujado: de la fila más lejana (arriba) a la más cercana (abajo)
+  for (let k = totalFilas; k >= 1; k = k - 1) 
+  {
+    let f = filas[k - 1];
+    let yFront = centroY - (k - 1) * paso - W;
+    let yTapa = yFront - altoTapa;
+
+    //Perspectiva atmosférica por fila (0 = más cercana, 1 = más lejana)
+    let factorAtm = (k - 1) / (totalFilas - 1);
+
+    //[CUBO] Dentro de cada fila, de izquierda a derecha
+    for (let col = 0; col < Ncols; col = col + 1) 
+    {
+      let tipo = f.bloques[col];
+      if (tipo == TIPO_VACIO) 
+      {
+        continue;
+      }
+
+      let posX = centroX - (Ncols * W) / 2 + col * W;
+      let cBase = colorDeTipo(tipo);
+
+      //Color base atenuado con perspectiva atmosférica hacia colorHorizonte
+      let cBaseAtm = lerpColor(cBase, cHorizonte, factorAtm * 0.45);
+
+      //Tono frontal (color base de tono medio)
+      let cFrontal = cBaseAtm;
+
+      //Tono tapa superior: el más claro (+18–25% de luminosidad hacia blanco)
+      let factorBrilloTapa = CONFIG_CUBO.brilloTapa * (1 - factorAtm * 0.35);
+      let cTapa = lerpColor(cBaseAtm, color(255), factorBrilloTapa);
+
+      //Tono lateral: más oscuro (-20–25% de luminosidad hacia negro)
+      let factorOscuridadLat = CONFIG_CUBO.oscuridadLateral * (1 - factorAtm * 0.35);
+      let cLateral = lerpColor(cBaseAtm, color(0), factorOscuridadLat);
+
+      let esExtremoIzq = (col == f.columnaInicio);
+      let esExtremoDer = (col == f.columnaFin - 1);
+      let incLat = CONFIG_CUBO.inclinacionLateral;
+
+      let xTL = posX + (esExtremoIzq ? incLat : 0);
+      let xTR = posX + W - (esExtremoDer ? incLat : 0);
+      let xBL = posX;
+      let xBR = posX + W;
+
+      //1. CARA FRONTAL: cuadrado, de frente, sin inclinación
+      bufferPlataforma.fill(cFrontal);
+      bufferPlataforma.rect(posX, yFront, W, W);
+
+      //2. TAPA SUPERIOR: techo recto al centro, inclinado en celdas laterales finales
+      bufferPlataforma.fill(cTapa);
+      bufferPlataforma.quad(xTL, yTapa, xTR, yTapa, xBR, yFront, xBL, yFront);
+
+      //3. ARISTAS: 1 px más clara en borde superior de la tapa y 1 px más oscura en base frontal (sin contornos negros)
+      let cAristaTapa = lerpColor(cTapa, color(255), 0.3);
+      bufferPlataforma.fill(cAristaTapa);
+      bufferPlataforma.rect(xTL, yTapa, xTR - xTL, 1);
+      if (esExtremoIzq) 
+      {
+        bufferPlataforma.quad(xBL, yFront, xBL + 1, yFront, xTL + 1, yTapa, xTL, yTapa);
+      }
+      if (esExtremoDer) 
+      {
+        bufferPlataforma.quad(xBR - 1, yFront, xBR, yFront, xTR, yTapa, xTR - 1, yTapa);
+      }
+
+      let cAristaBase = lerpColor(cFrontal, color(0), 0.35);
+      bufferPlataforma.fill(cAristaBase);
+      bufferPlataforma.rect(posX, yFront + W - 1, W, 1);
+    }
+
+    //4. SOMBRA DE CONTACTO:
+    //Dibujada DESPUÉS de la tapa de la terraza inferior (fila k) y ANTES de la siguiente,
+    //4 franjas de 3 px (12 px total) con alpha 120, 85, 50 y 20 alineadas con el borde de la tapa inferior
+    if (k < totalFilas) 
+    {
+      let xInicioFila = centroX - (Ncols * W) / 2 + f.columnaInicio * W;
+      let xFinFila = centroX - (Ncols * W) / 2 + f.columnaFin * W;
+      let incLat = CONFIG_CUBO.inclinacionLateral;
+
+      //Atenuación atmosférica: reduce el alpha solo un 25% en las terrazas lejanas
+      let atenuacionAtm = 1 - 0.25 * (k / (totalFilas - 1));
+
+      let dx0 = round(incLat * (1 - 0 / altoTapa));
+      bufferPlataforma.fill(0, 0, 0, round(120 * atenuacionAtm));
+      bufferPlataforma.rect(xInicioFila + dx0, yTapa, (xFinFila - dx0) - (xInicioFila + dx0), 3);
+
+      let dx1 = round(incLat * (1 - 3 / altoTapa));
+      bufferPlataforma.fill(0, 0, 0, round(85 * atenuacionAtm));
+      bufferPlataforma.rect(xInicioFila + dx1, yTapa + 3, (xFinFila - dx1) - (xInicioFila + dx1), 3);
+
+      let dx2 = round(incLat * (1 - 6 / altoTapa));
+      bufferPlataforma.fill(0, 0, 0, round(50 * atenuacionAtm));
+      bufferPlataforma.rect(xInicioFila + dx2, yTapa + 6, (xFinFila - dx2) - (xInicioFila + dx2), 3);
+
+      let dx3 = round(incLat * (1 - 9 / altoTapa));
+      bufferPlataforma.fill(0, 0, 0, round(20 * atenuacionAtm));
+      bufferPlataforma.rect(xInicioFila + dx3, yTapa + 9, (xFinFila - dx3) - (xInicioFila + dx3), 3);
+    }
+  }
+}
 
 /*cache de los colores de cada tipo de bloque: se crean una única vez (acá abajo), en vez de 
 instanciar un p5.Color nuevo por bloque en cada frame dentro de colorDeTipo()*/
@@ -2598,6 +2905,17 @@ function dibujarCuadroInstrucciones()
     let xIconoCentrado = xIcono - (anchoIcono - tamañoIcono) / 2;
     let yIcono = yCursor + altoLinea / 2 - altoIcono / 2;
     image(icono, xIconoCentrado, yIcono, anchoIcono, altoIcono);
+    if (icono == miraIcono) 
+    {
+      push();
+      stroke(255);
+      strokeWeight(1);
+      line(xIconoCentrado + anchoIcono * 0.28, yIcono + altoIcono / 2,
+      xIconoCentrado + anchoIcono * 0.47, yIcono + altoIcono / 2);
+      line(xIconoCentrado + anchoIcono * 0.53, yIcono + altoIcono / 2,
+      xIconoCentrado + anchoIcono * 0.72, yIcono + altoIcono / 2);
+      pop();
+    }
     describe(icono.description);
 
     textFont(fuenteBoton);
