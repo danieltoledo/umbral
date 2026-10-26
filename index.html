@@ -9,10 +9,18 @@
     <link rel="stylesheet" type="text/css" href="style.css">
 
     <script src="libraries/p5.min.js"></script>
+    <!-- Compatibilidad de p5.sound al abrir el juego por HTTP desde otro dispositivo. -->
+    <script>
+      if (window.isSecureContext == false && typeof AudioWorkletNode == "function")
+      {
+        window.AudioWorkletNode = undefined;
+      }
+    </script>
     <script src="libraries/p5.sound.min.js"></script>
   </head>
 
-  <body class="mano-diestro">
+  <body>
+    <div id="game-wrapper">
     <h1>Umbral – Minijuego</h1>
     <div id="contenedorCanva"></div>
     <script src="sketch.js"></script>
@@ -30,17 +38,7 @@
     <div id="uiMovil">
       <div id="modalOrientacion">
         <img src="assets/girar.png" alt="" width="96" height="96">
-        <p id="textoGirar">Girál el celular a horizontal para jugar</p>
-        <div id="seleccionMano">
-          <button type="button" id="btnZurdo" data-mano="zurdo">
-            <img src="assets/izquierda.png" alt="">
-            <span>Zurdo (mira a la izquierda)</span>
-          </button>
-          <button type="button" id="btnDiestro" data-mano="diestro">
-            <img src="assets/derecha.png" alt="">
-            <span>Diestro (mira a la derecha)</span>
-          </button>
-        </div>
+        <p id="textoGirar">Girá el celular a horizontal para jugar</p>
       </div>
 
       <button type="button" id="btnInfo">Info</button>
@@ -65,14 +63,15 @@
           <button type="button" class="padBtn padAbajo" data-dir="abajo" aria-label="Abajo"></button>
         </div>
       </div>
-      <div id="padMira" class="padDireccional">
+      <div id="padMovimientoDerecho" class="padDireccional">
         <div class="padCruce">
-          <button type="button" class="padBtn padArriba" data-dir="arriba" aria-label="Mira arriba"></button>
-          <button type="button" class="padBtn padIzquierda" data-dir="izquierda" aria-label="Mira izquierda"></button>
-          <button type="button" class="padBtn padDerecha" data-dir="derecha" aria-label="Mira derecha"></button>
-          <button type="button" class="padBtn padAbajo" data-dir="abajo" aria-label="Mira abajo"></button>
+          <button type="button" class="padBtn padArriba" data-dir="arriba" aria-label="arriba"></button>
+          <button type="button" class="padBtn padIzquierda" data-dir="izquierda" aria-label="izquierda"></button>
+          <button type="button" class="padBtn padDerecha" data-dir="derecha" aria-label="derecha"></button>
+          <button type="button" class="padBtn padAbajo" data-dir="abajo" aria-label="abajo"></button>
         </div>
       </div>
+    </div>
     </div>
   </body>
 </html>
