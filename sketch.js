@@ -17,6 +17,26 @@ let MIRA_RADIO_PANTALLA = 28;
 let MIRA_TAMANO_PANTALLA = 28;
 let MIRA_ESPERA_RAFAGA_MS = 150;
 
+//Háptica: patrones en ms y prioridad (la más alta cancela a la más baja)
+const CONFIG_HAPTICA = 
+{
+  ui: { patron: [8], esperaMinMs: 80, prioridad: 1 },
+  desvio: { patron: [10], esperaMinMs: 100, prioridad: 2 },
+  plataforma: { patron: [40, 30, 40], esperaMinMs: 150, prioridad: 3 },
+  personaje: { patron: [120, 40, 200], esperaMinMs: 0, prioridad: 4 }
+};
+let CLAVE_VIBRACION = "umbral_vibracion";
+let vibracionActiva = true;
+let hapticaTipoActivo = "";
+let hapticaFinMs = 0;
+let hapticaUltimaMs = {};
+let hapticaInterruptorIos = null;
+let vibracionBotonX = 0;
+let vibracionBotonY = 0;
+const TEXTO_NOTA_VIBRACION = "Es experimental en iOS 18 o posterior. No funciona en Firefox para Android.";
+const PISTA_VIBRACION_ENCENDER = "(toca el ícono para activarla)";
+const PISTA_VIBRACION_APAGAR = "(toca el ícono para desactivarla)";
+
 //Móvil: estado de pads y punteros (no se usa en escritorio)*/
 let padPasoUsado = false;
 let idPunteroMira = -1;
@@ -157,7 +177,7 @@ let lienzo;
 //Variables para cargar los archivos:
 let musica, interceptar, meteorito, muerteSer, fuenteBoton, fuenteCuadro, alertaIcono, astroIcono, 
 meteoritoIcono, musicaEncenderIcono, musicaApagarIcono, pantallaCompletaIcono, pantallaIncompletaIcono, 
-relojIcono, saludIcono, miraIcono, monedaIcono, aurisIcono;
+relojIcono, saludIcono, miraIcono, monedaIcono, aurisIcono, hapticaEncenderIcono, hapticaApagarIcono;
 
 //recompensa en moneda (ASTRO$) según el puesto obtenido: primero, segundo y tercero
 let RECOMPENSAS_PUESTO = [100, 60, 30];
@@ -413,6 +433,8 @@ function preload()
   miraIcono = loadImage("assets/telescopio.png", "Ícono de un telescopio con vista lateral");
   monedaIcono = loadImage("assets/moneda.png", "Ícono de una moneda de astros");
   aurisIcono = loadImage("assets/auris.png", "Ícono de unos auriculares");
+  hapticaEncenderIcono = loadImage("assets/vibracion-encender.png", "Ícono de vibración activada");
+  hapticaApagarIcono = loadImage("assets/vibracion-apagar.png", "Ícono de vibración desactivada");
 }
 
 function setup() 
@@ -424,6 +446,7 @@ function setup()
   inicializarColoresBloques();
   inicializarColoresBotones();
   inicializarInstrucciones();
+  inicializarHaptica();
   generarEstrellas();
   generarNebulosas();
   generarViñeta();
@@ -1874,6 +1897,7 @@ function mousePressed(evento_)
     case ESTADO_MENU:
       if(mouseOverRect(500, 226, zonaToggle, zonaToggle))
       {
+        haptic("ui");
         /*se reanuda el AudioContext y se arranca/pausa la música en el mismo paso síncrono del 
         click: si loop() se llama recién adentro del .then() de userStartAudio(), ese llamado 
         queda afuera del gesto original y en algunos navegadores el sonido no arranca hasta 
@@ -1898,11 +1922,13 @@ function mousePressed(evento_)
 
       if(mouseOverRect(780, 226, zonaToggle, zonaToggle))
       {
+        haptic("ui");
         alternarPantallaCompleta();
       }
 
       if(mouseOverRect(640, 291, 320, 48))
       {
+        haptic("ui");
         //frameCount para la partida arranca acá, no antes
         juego.frameDeInicio = frameCount;
         juego.reiniciar();
@@ -1916,6 +1942,12 @@ function mousePressed(evento_)
 
     case ESTADO_INSTRUCCIONES:
       chequearClick(640, 617, 320, 48, ESTADO_MENU);
+      if (esTelefono() == true && mouseOverRect(vibracionBotonX, vibracionBotonY, 44, 44))
+      {
+        vibracionActiva = !vibracionActiva;
+        guardarPreferenciaVibracion();
+        haptic("ui");
+      }
     break;
 
     case ESTADO_CREDITOS:
@@ -1931,6 +1963,7 @@ function mousePressed(evento_)
       {
         if(mouseOverRect(640, 469, 320, 48))
         {
+          haptic("ui");
           //mismo reinicio que el botón JUGAR del menú
           juego.frameDeInicio = frameCount;
           juego.reiniciar();
@@ -1938,6 +1971,7 @@ function mousePressed(evento_)
         }
         if(mouseOverRect(640, 535, 320, 48))
         {
+          haptic("ui");
           interferenciaActiva = false;
           volumenMusica = 0.24;
           if (musica.isPlaying() == true) 
@@ -3274,6 +3308,7 @@ class Meteorito
       muerteSer.pan(panorama, 0.05);
       muerteSer.stop();
       muerteSer.play();
+      haptic("personaje");
       juego_.resultado = "DERROTA";
       juego_.detalleResultado = "Un meteorito te impactó directamente.";
       juego_.filaVibra = this.filaObjetivo;
@@ -3295,6 +3330,7 @@ class Meteorito
         frameUltimoSonidoMeteorito = frameCount;
       }
       juego_.marcarBloqueado(this.filaObjetivo, this.columnaObjetivo);
+      haptic("plataforma");
     }
   }
 
@@ -3318,6 +3354,7 @@ class Meteorito
     let panorama = constrain(map(this.x, 0, 1280, -1, 1), -1, 1);
     interceptar.pan(panorama, 0.05);
     reproducirSonido(interceptar, factorVolumenPorDistancia(this.x, this.y, juego));
+    haptic("desvio");
   }
 
   //método: dibuja el rastro, el meteorito activo, y la explosión si corresponde
@@ -3729,6 +3766,11 @@ function inicializarInstrucciones()
     { icono: aurisIcono, titulo: "Opcional", 
     texto: "Se recomienda usar auriculares para una mejor experiencia.", respetarProporcion: true, escala: 0.72 }
   ];
+
+  if (esTelefono() == true)
+  {
+    listaInstrucciones.push({ titulo: "Vibración", texto: TEXTO_NOTA_VIBRACION, alternarVibracion: true });
+  }
 }
 
 /*cuadro de INSTRUCCIONES: a diferencia de dibujarCuadro() (que centra todo el bloque de texto), 
@@ -3738,7 +3780,7 @@ function dibujarCuadroInstrucciones()
 {
   let margen = 24;
   let separacionLineas = 24;
-  let altoInstruccion = 66;
+  let altoInstruccion = 60;
   let altoLinea = 22;
   let tamañoIcono = 32;
 
@@ -3750,7 +3792,14 @@ function dibujarCuadroInstrucciones()
   for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
   {
     textFont(fuenteBoton);
-    anchoContenido = max(anchoContenido, textWidth(listaInstrucciones[i].titulo));
+    let anchoTitulo = textWidth(listaInstrucciones[i].titulo);
+    if (listaInstrucciones[i].alternarVibracion) 
+    {
+      textFont(fuenteCuadro);
+      let anchoPista = max(textWidth(PISTA_VIBRACION_ENCENDER), textWidth(PISTA_VIBRACION_APAGAR));
+      anchoTitulo = anchoTitulo + 8 + anchoPista;
+    }
+    anchoContenido = max(anchoContenido, anchoTitulo);
     textFont(fuenteCuadro);
     anchoContenido = max(anchoContenido, textWidth(listaInstrucciones[i].texto));
   }
@@ -3786,7 +3835,13 @@ function dibujarCuadroInstrucciones()
   for (let i = 0; i < listaInstrucciones.length; i = i + 1) 
   {
     let instruccion = listaInstrucciones[i];
+    let esAlternarVibracion = (instruccion.alternarVibracion == true);
     let icono = instruccion.icono;
+    let texto = instruccion.texto;
+    if (esAlternarVibracion == true)
+    {
+      icono = vibracionActiva ? hapticaApagarIcono : hapticaEncenderIcono;
+    }
     let anchoIcono = tamañoIcono;
     let altoIcono = tamañoIcono;
     if (instruccion.respetarProporcion && icono.height > 0) 
@@ -3798,6 +3853,13 @@ function dibujarCuadroInstrucciones()
     //centrado sobre el mismo eje que los íconos de 32 px y a la altura del título
     let xIconoCentrado = xIcono - (anchoIcono - tamañoIcono) / 2;
     let yIcono = yCursor + altoLinea / 2 - altoIcono / 2;
+    if (esAlternarVibracion == true)
+    {
+      let xCentroBoton = xIcono + tamañoIcono / 2;
+      let yCentroBoton = yCursor + altoLinea / 2;
+      vibracionBotonX = 640 + xCentroBoton;
+      vibracionBotonY = 324 + yCentroBoton;
+    }
     image(icono, xIconoCentrado, yIcono, anchoIcono, altoIcono);
     if (icono == miraIcono) 
     {
@@ -3814,9 +3876,17 @@ function dibujarCuadroInstrucciones()
 
     textFont(fuenteBoton);
     text(instruccion.titulo, xTexto, yCursor);
+    if (esAlternarVibracion == true) 
+    {
+      let pista = (icono == hapticaApagarIcono) ? PISTA_VIBRACION_APAGAR : PISTA_VIBRACION_ENCENDER;
+      let xPista = xTexto + textWidth(instruccion.titulo) + 8;
+      textFont(fuenteCuadro);
+      fill(255);
+      text(pista, xPista, yCursor);
+    }
 
     textFont(fuenteCuadro);
-    text(instruccion.texto, xTexto, yCursor + separacionLineas);
+    text(texto, xTexto, yCursor + separacionLineas);
     yCursor = yCursor + altoInstruccion;
   }
   pop();
@@ -3905,6 +3975,7 @@ function chequearClick(x_, y_, ancho_, alto_, estadoDestino_)
 {
   if(mouseOverRect(x_, y_, ancho_, alto_)) 
   {
+    haptic("ui");
     estado = estadoDestino_;
   }
 }
@@ -4377,4 +4448,98 @@ function inicializarMovil()
 
   window.addEventListener("orientationchange", actualizarOrientacionMovil);
   actualizarOrientacionMovil();
+}
+
+function inicializarHaptica() 
+{
+  try 
+  {
+    vibracionActiva = localStorage.getItem(CLAVE_VIBRACION) != "0";
+  } 
+  catch (error) {}
+
+  if (esTelefono() == true && typeof navigator.vibrate != "function") 
+  {
+    crearInterruptorHapticaIos();
+  }
+}
+
+//iOS no expone navigator.vibrate: un switch oculto cuyo label se clickea simula un pulso
+function crearInterruptorHapticaIos() 
+{
+  let interruptor = document.createElement("input");
+  interruptor.type = "checkbox";
+  interruptor.setAttribute("switch", "");
+  interruptor.id = "hapticaInterruptor";
+  interruptor.style.display = "none";
+
+  let etiqueta = document.createElement("label");
+  etiqueta.htmlFor = interruptor.id;
+  etiqueta.style.display = "none";
+
+  document.body.appendChild(interruptor);
+  document.body.appendChild(etiqueta);
+  hapticaInterruptorIos = etiqueta;
+}
+
+function guardarPreferenciaVibracion() 
+{
+  try 
+  {
+    localStorage.setItem(CLAVE_VIBRACION, vibracionActiva ? "1" : "0");
+  } 
+  catch (error) {}
+}
+
+function duracionPatronHaptica(patron_) 
+{
+  return patron_.reduce(function(a_, b_) 
+  {
+    return a_ + b_;
+  }, 0);
+}
+
+//pulso háptico según el tipo: no hace nada en escritorio o con la vibración desactivada, y
+//cancela el pulso en curso si el nuevo tiene mayor prioridad
+function haptic(tipo_) 
+{
+  if (vibracionActiva == false || esTelefono() == false) 
+  {
+    return;
+  }
+
+  let configuracion = CONFIG_HAPTICA[tipo_];
+  let ahora = millis();
+  let ultimaVez = hapticaUltimaMs[tipo_];
+  if (ultimaVez != undefined && ahora - ultimaVez < configuracion.esperaMinMs) 
+  {
+    return;
+  }
+
+  let hayPulsoActivo = ahora < hapticaFinMs;
+  if (hayPulsoActivo == true && CONFIG_HAPTICA[hapticaTipoActivo].prioridad > configuracion.prioridad) 
+  {
+    return;
+  }
+
+  hapticaUltimaMs[tipo_] = ahora;
+  hapticaTipoActivo = tipo_;
+  hapticaFinMs = ahora + duracionPatronHaptica(configuracion.patron);
+
+  try 
+  {
+    if (typeof navigator.vibrate == "function") 
+    {
+      if (hayPulsoActivo == true) 
+      {
+        navigator.vibrate(0);
+      }
+      navigator.vibrate(configuracion.patron);
+    } 
+    else if (hapticaInterruptorIos != null) 
+    {
+      hapticaInterruptorIos.click();
+    }
+  } 
+  catch (error) {}
 }
