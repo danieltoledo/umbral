@@ -441,8 +441,8 @@ function setup()
   outputVolume(0.7);
   musica.setLoop(true);
   musica.amp(0.22);
-  meteorito.amp(0.35);
-  interceptar.amp(0.7);
+  meteorito.amp(1.5);
+  interceptar.amp(2.4);
   muerteSer.amp(0.6);
 
   /*ruido blanco (estática de señal de radio) que queda sonando en volumen 0 desde el inicio, así 
