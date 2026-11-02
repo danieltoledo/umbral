@@ -29,6 +29,107 @@ let aimY = 360;
 //[CUBO] Capa gráfica cacheada (p5.Graphics) para pre-renderizar los cubos con cero costo por frame
 let bufferPlataforma;
 
+//[AUDIO] Parámetros acústicos y de telecomunicaciones por celda
+const AUDIO_CONFIG = 
+{
+  tiempoAtaque: 0.15,
+  colaRojo: 1.5,
+  colaGris: 1.0,
+  colaVerde: 0.5,
+  exponenteGradacion: 1.5,
+
+  //Gris (Lunar): banda limitada tipo radio distante
+  grisHpSuave: 300,
+  grisHpExtremo: 1200,
+  grisLpSuave: 6000,
+  grisLpExtremo: 2500,
+  compensacionVolumenGris: 1.5, // Compensa la atenuación del filtro pasabanda lunar para igualar el volumen de verde y rojo
+  topeGananciaGris: 4,
+  umbralMedicionGris: 0.0001,
+
+  //Roja (Marte): sonido apagado y grave con estática
+  rojoLpSuave: 2500,
+  rojoLpExtremo: 400,
+  rojoEstaticaSuave: 0.02,
+  rojoEstaticaExtremo: 0.15,
+
+  //Verde (Tierra): sin filtros (audio limpio)
+  limpioHp: 10,
+  limpioLp: 22000
+};
+
+//Filtros p5.Filter para procesar la música del juego
+let filtroPasaAltos;
+let filtroPasaBajos;
+let gananciaMusica;
+let nivelMusicaSinFiltro;
+let nivelMusicaFiltrada;
+let compensacionGrisActual = 1;
+
+//Pesos de transición suave entre celdas (entrada ~150 ms / colas de salida)
+let pesoGris = 0;
+let pesoRojo = 0;
+let pesoVerde = 1;
+
+let O2W_MAX = 90;
+
+//interpolación en escala logarítmica para frecuencias de audio
+function lerpLog(fMin_, fMax_, t_) 
+{
+  let factor = constrain(t_, 0, 1);
+  return fMin_ * Math.pow(fMax_ / fMin_, factor);
+}
+
+//[AUDIO] Parámetros de síntesis crítica para O2/W bajo (sin archivos)
+const CONFIG_AUDIO_SINTESIS = 
+{
+  umbralO2WCritico: 45,       // Se activan solo por debajo de este valor (de 90)
+
+  // Astronauta en Gris: respiración (ruido filtrado + envelope)
+  respiracionFreqFiltro: 750, // Frecuencia central del filtro de aire
+  respiracionResFiltro: 2.5,  // Resonancia del casco cerrado
+  intervaloRespiracionMax: 3.2, // Segundos entre respiraciones con O2/W moderado
+  intervaloRespiracionMin: 7.0, // Segundos entre respiraciones con O2/W casi vacío (más espaciadas)
+  volumenRespiracionMax: 0.28,  // Volumen perceptible de la respiración
+  volumenRespiracionMin: 0.12,  // Volumen mínimo con O2/W bajo
+
+  // Astronauta en Gris al llegar a 0 de O2/W: última exhalación que se desploma
+  exhalacionDuracion: 1.2,    // Duración total en segundos (~1.2 s)
+  exhalacionAtaque: 0.08,     // Ataque corto en segundos
+  exhalacionDecay: 0.32,      // Caída inicial en segundos
+  exhalacionSustain: 0.20,    // Nivel intermedio de sostenido (proporción)
+  exhalacionRelease: 1.12,    // Caída lenta final en segundos
+  exhalacionVolumen: 0.36,    // Volumen de la exhalación final, claramente perceptible sobre la música
+  exhalacionFreqInicio: 600,  // Corte inicial del pasabanda (~600 Hz)
+  exhalacionFreqFin: 150,     // Corte final del pasabanda al desplomarse (~150 Hz)
+
+  // Rover en Rojo: zumbido sierra ~50-60 Hz
+  roverZumbidoFreqBase: 58,   // Hz base del zumbido
+  roverZumbidoFreqMin: 44,    // Hz cuando el O2/W cae
+  roverZumbidoVolMax: 0.16,   // Volumen máximo
+  roverZumbidoVolMin: 0.03,   // Decae a medida que cae el O2/W
+
+  // Rover en Rojo al llegar a 0: pitido comunicación perdida (~1200 Hz)
+  roverPitidoFreq: 1200,      // Hz del pitido senoidal
+  roverPitidoVol: 0.25,       // Volumen del pitido
+  roverPitidoDuracion: 0.35   // Duración en segundos
+};
+
+// Generadores sintetizados p5.sound
+let ruidoRespiracion;
+let filtroRespiracion;
+let envRespiracion;
+let oscZumbidoRover;
+let oscPitidoRover;
+
+// Variables de estado de la síntesis
+let sintesisAudioIniciada = false;
+let tiempoUltimaRespiracion = 0;
+let duracionCicloRespiracionActual = 3.5;
+let pitidoRoverEmitido = false;
+let respiracionMuerteEmitida = false;
+let timeoutsSintesis = [];
+
 /*Tipos de bloque de la plataforma, no hay bloque dado que no se puede pisar ni hay 
 superficie ahí (define el "hueco" de la pirámide y los bordes de cada fila)*/
 let TIPO_VACIO = 0; 
@@ -82,8 +183,8 @@ la estática aparece en ráfagas breves de duración irregular, separadas por pe
 let volumenEstatica = 0;
 let frameUltimoCorteEstatica = 0;
 let duracionCorteEstatica = 0;
-//volumen de la música según la pantalla: 0.3 en menús y más bajo en el juego (debajo de los efectos)
-let volumenMusica = 0.3;
+//volumen de la música según la pantalla: 0.24 en menús y 0.22 en el juego (debajo de los efectos)
+let volumenMusica = 0.22;
 
 //posición de la mira (sigue al mouse directamente)
 let miraX = 640;
@@ -117,6 +218,7 @@ window.addEventListener("keydown", function(evento_)
   {
     getAudioContext().resume();
   }
+  iniciarSintesisAudio();
 
   if (evento_.code == "ArrowLeft" || evento_.code == "ArrowRight" || evento_.code == "ArrowUp" ||
   evento_.code == "ArrowDown" || evento_.code == "KeyW" || evento_.code == "KeyA" ||
@@ -242,6 +344,7 @@ window.addEventListener("focus", function()
   {
     getAudioContext().resume();
   }
+  iniciarSintesisAudio();
 });
 
 document.addEventListener("visibilitychange", function() 
@@ -285,6 +388,7 @@ document.addEventListener("fullscreenchange", function()
   {
     getAudioContext().resume();
   }
+  iniciarSintesisAudio();
 });
 
 function preload() 
@@ -336,7 +440,7 @@ function setup()
 
   outputVolume(0.7);
   musica.setLoop(true);
-  musica.amp(0.3);
+  musica.amp(0.22);
   meteorito.amp(0.35);
   interceptar.amp(0.7);
   muerteSer.amp(0.6);
@@ -346,6 +450,53 @@ function setup()
   ruidoInterferencia = new p5.Noise("white");
   ruidoInterferencia.amp(0);
   ruidoInterferencia.start();
+
+  //filtros acústicos de telecomunicaciones para la música
+  filtroPasaAltos = new p5.HighPass();
+  filtroPasaBajos = new p5.LowPass();
+  filtroPasaAltos.freq(AUDIO_CONFIG.limpioHp);
+  filtroPasaBajos.freq(AUDIO_CONFIG.limpioLp);
+
+  musica.disconnect();
+  musica.connect(filtroPasaAltos);
+  filtroPasaAltos.disconnect();
+  filtroPasaAltos.connect(filtroPasaBajos);
+
+  //compensación final solo de la música, después de los filtros
+  gananciaMusica = new p5.Gain();
+  gananciaMusica.input.gain.value = 1;
+  gananciaMusica.amp(1);
+  filtroPasaBajos.disconnect();
+  filtroPasaBajos.connect(gananciaMusica);
+  gananciaMusica.connect();
+
+  //medición silenciosa de la música antes y después de los filtros, sin incluir otros efectos
+  nivelMusicaSinFiltro = new p5.Amplitude();
+  nivelMusicaSinFiltro.setInput(musica);
+  nivelMusicaFiltrada = new p5.Amplitude();
+  nivelMusicaFiltrada.setInput(filtroPasaBajos);
+
+  //[SÍNTESIS] Inicialización de generadores para sonidos de O2/W crítico (sin archivos)
+  ruidoRespiracion = new p5.Noise("pink");
+  filtroRespiracion = new p5.BandPass();
+  filtroRespiracion.freq(CONFIG_AUDIO_SINTESIS.respiracionFreqFiltro);
+  filtroRespiracion.res(CONFIG_AUDIO_SINTESIS.respiracionResFiltro);
+  ruidoRespiracion.disconnect();
+  ruidoRespiracion.connect(filtroRespiracion);
+  ruidoRespiracion.amp(0);
+  ruidoRespiracion.start();
+
+  envRespiracion = new p5.Envelope();
+
+  oscZumbidoRover = new p5.Oscillator("sawtooth");
+  oscZumbidoRover.freq(CONFIG_AUDIO_SINTESIS.roverZumbidoFreqBase);
+  oscZumbidoRover.amp(0);
+  oscZumbidoRover.start();
+
+  oscPitidoRover = new p5.Oscillator("sine");
+  oscPitidoRover.freq(CONFIG_AUDIO_SINTESIS.roverPitidoFreq);
+  oscPitidoRover.amp(0);
+  oscPitidoRover.start();
 
   juego = new Juego();
 
@@ -773,6 +924,439 @@ function dibujarManchaEnContexto(contexto_, x_, y_, radioMax_, colorEstilo_, alf
   }
 }
 
+//actualiza dinámicamente los filtros de audio y estática según el bloque pisado y el O2/W
+function actualizarAudioPorCelda() 
+{
+  if (!musica || typeof musica.isPlaying !== "function" || !musica.isPlaying()) 
+  {
+    return;
+  }
+
+  // Si no estamos en la pantalla de juego, retornar suavemente a audio limpio
+  if (estado != ESTADO_JUEGO || !juego || !juego.astronauta) 
+  {
+    pesoGris = max(0, pesoGris - 0.05);
+    pesoRojo = max(0, pesoRojo - 0.05);
+    pesoVerde = min(1, pesoVerde + 0.05);
+
+    if (filtroPasaAltos && filtroPasaBajos) 
+    {
+      filtroPasaAltos.freq(AUDIO_CONFIG.limpioHp, 0.05);
+      filtroPasaBajos.freq(AUDIO_CONFIG.limpioLp, 0.05);
+    }
+    if (gananciaMusica)
+    {
+      gananciaMusica.amp(1, 0.05);
+    }
+    compensacionGrisActual = 1;
+    return;
+  }
+
+  let dt = constrain(deltaTime / 1000, 0.001, 0.1);
+  let tipoActual = juego.astronauta.tipoPisado;
+
+  let targetGris = (tipoActual == TIPO_GRIS_CLARO) ? 1 : 0;
+  let targetRojo = (tipoActual == TIPO_ROJO) ? 1 : 0;
+  let targetVerde = (tipoActual == TIPO_VERDE) ? 1 : 0;
+
+  // Ataque rápido (~150 ms) y colas de desvanecimiento independientes
+  if (targetGris == 1) 
+  {
+    pesoGris = min(1, pesoGris + dt / AUDIO_CONFIG.tiempoAtaque);
+  } 
+  else 
+  {
+    pesoGris = max(0, pesoGris - dt / AUDIO_CONFIG.colaGris);
+  }
+
+  if (targetRojo == 1) 
+  {
+    pesoRojo = min(1, pesoRojo + dt / AUDIO_CONFIG.tiempoAtaque);
+  } 
+  else 
+  {
+    pesoRojo = max(0, pesoRojo - dt / AUDIO_CONFIG.colaRojo);
+  }
+
+  if (targetVerde == 1) 
+  {
+    pesoVerde = min(1, pesoVerde + dt / AUDIO_CONFIG.tiempoAtaque);
+  } 
+  else 
+  {
+    pesoVerde = max(0, pesoVerde - dt / AUDIO_CONFIG.colaVerde);
+  }
+
+  // Continuidad de interferencia en rojo: se mantiene activa mientras dure la cola
+  if (pesoRojo > 0.05) 
+  {
+    interferenciaActiva = true;
+  } 
+  else if (tipoActual != TIPO_ROJO && interferenciaActiva == true) 
+  {
+    interferenciaActiva = false;
+  }
+
+  // Gradación: intensidad = 1 - (O2W / O2W_MAX), con curva opcional (intensidad^1.5)
+  let propO2W = constrain(juego.nivelO2W / O2W_MAX, 0, 1);
+  let intensidad = pow(1 - propO2W, AUDIO_CONFIG.exponenteGradacion);
+
+  // Parámetros por celda interpolados con la intensidad
+  let grisHpTarget = lerpLog(AUDIO_CONFIG.grisHpSuave, AUDIO_CONFIG.grisHpExtremo, intensidad);
+  let grisLpTarget = lerpLog(AUDIO_CONFIG.grisLpSuave, AUDIO_CONFIG.grisLpExtremo, intensidad);
+
+  let rojoLpTarget = lerpLog(AUDIO_CONFIG.rojoLpSuave, AUDIO_CONFIG.rojoLpExtremo, intensidad);
+  let rojoEstaticaTarget = lerp(AUDIO_CONFIG.rojoEstaticaSuave, AUDIO_CONFIG.rojoEstaticaExtremo, intensidad);
+
+  // Mezcla de efectos sin pasar por audio limpio en transiciones intermedias
+  let sumaEfectos = pesoGris + pesoRojo;
+  let pesoLimpio = max(0, 1 - sumaEfectos);
+
+  // Pasaaltos: activo en gris (radio lunar distante), abierto (10 Hz) en limpio y rojo
+  let hpFinal = lerpLog(AUDIO_CONFIG.limpioHp, grisHpTarget, pesoGris);
+
+  // Pasabajos: interpolación logarítmica ponderada entre limpio, gris y rojo
+  let totalPesosLp = pesoLimpio + pesoGris + pesoRojo;
+  let wLimpio = pesoLimpio / totalPesosLp;
+  let wGris = pesoGris / totalPesosLp;
+  let wRojo = pesoRojo / totalPesosLp;
+
+  let logLpFinal = wLimpio * Math.log(AUDIO_CONFIG.limpioLp) + wGris * Math.log(grisLpTarget) + wRojo * Math.log(rojoLpTarget);
+  let lpFinal = Math.exp(logLpFinal);
+
+  // Ruido estático base en rojo
+  let ruidoFinal = rojoEstaticaTarget * pesoRojo;
+
+  // Aplicación mediante rampas suaves de p5.sound sin saltos ni clics
+  if (filtroPasaAltos && filtroPasaBajos) 
+  {
+    filtroPasaAltos.freq(hpFinal, 0.05);
+    filtroPasaBajos.freq(lpFinal, 0.05);
+  }
+
+  if (ruidoInterferencia && pesoRojo > 0.01 && !ruidoActivo) 
+  {
+    ruidoInterferencia.amp(ruidoFinal, 0.05);
+  }
+
+  // El audio en celdas grises compensa la atenuación del filtro pasabanda para sonar al mismo volumen percibido que en celdas verdes y rojas
+  let compensacionGris = max(1, AUDIO_CONFIG.compensacionVolumenGris);
+  let gananciaObjetivo = lerp(1, compensacionGris, pesoGris);
+
+  if (pesoGris > 0 && nivelMusicaSinFiltro && nivelMusicaFiltrada)
+  {
+    let nivelSinFiltro = nivelMusicaSinFiltro.getLevel();
+    let nivelFiltrado = nivelMusicaFiltrada.getLevel();
+
+    if (nivelSinFiltro > AUDIO_CONFIG.umbralMedicionGris && nivelFiltrado > AUDIO_CONFIG.umbralMedicionGris)
+    {
+      //la medición ya incluye la intensidad y las rampas del filtro gris; no volver a reducirla por pesoGris
+      gananciaObjetivo = max(1, nivelSinFiltro / nivelFiltrado);
+    }
+    else
+    {
+      //no subir la ganancia por silencios ni por los cortes originales de interferencia
+      gananciaObjetivo = max(gananciaObjetivo, compensacionGrisActual);
+    }
+  }
+
+  gananciaObjetivo = min(gananciaObjetivo, max(1, AUDIO_CONFIG.topeGananciaGris));
+  compensacionGrisActual = gananciaObjetivo;
+
+  if (gananciaMusica)
+  {
+    gananciaMusica.amp(gananciaObjetivo, 0.05);
+  }
+
+  let volumenObjetivo = volumenMusica;
+
+  if (interferenciaActiva == false && musica.isPlaying() == true && abs(musica.getVolume() - volumenObjetivo) > 0.01) 
+  {
+    musica.amp(volumenObjetivo, 0.1);
+  }
+}
+
+//comprueba si el efecto visual de fin de partida terminó para mostrar el cuadro con opciones
+function efectoFinTerminado() 
+{
+  if (!juego || juego.resultado == "" || juego.frameDeFin == 0) 
+  {
+    return false;
+  }
+
+  let framesFin = frameCount - juego.frameDeFin;
+  let espera = 45;
+  if (juego.detalleResultado == "Un meteorito te impactó directamente.") 
+  {
+    espera = 65;
+  } 
+  else if (juego.detalleResultado == "La plataforma colapsó.") 
+  {
+    espera = 65;
+  }
+  else if (juego.detalleResultado == "Te quedaste sin O2/W.") 
+  {
+    espera = 75;
+  }
+
+  return (framesFin >= espera);
+}
+
+//inicia los nodos de síntesis de audio sobre el primer gesto del usuario
+function iniciarSintesisAudio() 
+{
+  if (typeof getAudioContext == "function") 
+  {
+    let ctx = getAudioContext();
+    if (ctx && ctx.state != "running") 
+    {
+      ctx.resume();
+    }
+    if (ctx && ctx.state == "running" && sintesisAudioIniciada == false) 
+    {
+      if (ruidoRespiracion && !ruidoRespiracion.started) 
+      {
+        try 
+        {
+          ruidoRespiracion.start();
+        } 
+        catch(e) {}
+      }
+      if (oscZumbidoRover && !oscZumbidoRover.started) 
+      {
+        try 
+        {
+          oscZumbidoRover.start();
+        } 
+        catch(e) {}
+      }
+      if (oscPitidoRover && !oscPitidoRover.started) 
+      {
+        try 
+        {
+          oscPitidoRover.start();
+        } 
+        catch(e) {}
+      }
+      sintesisAudioIniciada = true;
+    }
+  }
+}
+
+//limpia los temporizadores de síntesis y silencia los generadores
+function limpiarSintesisAudio() 
+{
+  for (let i = 0; i < timeoutsSintesis.length; i = i + 1) 
+  {
+    clearTimeout(timeoutsSintesis[i]);
+  }
+  timeoutsSintesis.length = 0;
+  pitidoRoverEmitido = false;
+  respiracionMuerteEmitida = false;
+  tiempoUltimaRespiracion = 0;
+  if (ruidoRespiracion) 
+  {
+    ruidoRespiracion.amp(0, 0.02);
+  }
+  if (filtroRespiracion) 
+  {
+    filtroRespiracion.freq(CONFIG_AUDIO_SINTESIS.respiracionFreqFiltro, 0.02);
+  }
+  if (oscZumbidoRover) 
+  {
+    oscZumbidoRover.amp(0, 0.02);
+  }
+  if (oscPitidoRover) 
+  {
+    oscPitidoRover.amp(0, 0.02);
+  }
+}
+
+//actualiza dinámicamente los sonidos sintetizados de respiración y zumbido según el O2/W
+function actualizarSintesisCritica() 
+{
+  if (sintesisAudioIniciada == false) 
+  {
+    iniciarSintesisAudio();
+    if (sintesisAudioIniciada == false) 
+    {
+      return;
+    }
+  }
+
+  // Fuera de la partida activa, silenciar todo
+  if (estado != ESTADO_JUEGO || !juego || !juego.astronauta) 
+  {
+    if (ruidoRespiracion) 
+    {
+      ruidoRespiracion.amp(0, 0.05);
+    }
+    if (oscZumbidoRover) 
+    {
+      oscZumbidoRover.amp(0, 0.05);
+    }
+    if (oscPitidoRover) 
+    {
+      oscPitidoRover.amp(0, 0.05);
+    }
+    return;
+  }
+
+  let nivelO2W = juego.nivelO2W;
+  let umbral = CONFIG_AUDIO_SINTESIS.umbralO2WCritico;
+  let tipoActual = juego.astronauta.tipoPisado;
+  let esRover = (tipoActual == TIPO_ROJO || juego.astronauta.atrapado == true);
+  let esAstronauta = (!esRover);
+  let tiempoActualSeg = millis() / 1000;
+
+  // 1. ASTRONAUTA EN CELDA GRIS (Respiración con p5.Noise filtrado + p5.Envelope)
+  if (esAstronauta == true && tipoActual == TIPO_GRIS_CLARO && nivelO2W < umbral && nivelO2W > 0) 
+  {
+    let pPerdida = constrain((umbral - nivelO2W) / umbral, 0, 1);
+    let intervalo = lerp(CONFIG_AUDIO_SINTESIS.intervaloRespiracionMax, CONFIG_AUDIO_SINTESIS.intervaloRespiracionMin, pPerdida);
+    let volPico = lerp(CONFIG_AUDIO_SINTESIS.volumenRespiracionMax, CONFIG_AUDIO_SINTESIS.volumenRespiracionMin, pPerdida);
+
+    let tiempoDesdeUltima = tiempoActualSeg - tiempoUltimaRespiracion;
+    if (tiempoDesdeUltima >= duracionCicloRespiracionActual) 
+    {
+      tiempoUltimaRespiracion = tiempoActualSeg;
+      duracionCicloRespiracionActual = intervalo;
+
+      if (filtroRespiracion) 
+      {
+        filtroRespiracion.freq(CONFIG_AUDIO_SINTESIS.respiracionFreqFiltro);
+      }
+
+      // Dispara ciclo de respiración lento perceptible
+      if (ruidoRespiracion) 
+      {
+        ruidoRespiracion.amp(volPico, 0.4);
+        let tRespCaida = setTimeout(function() 
+        {
+          if (ruidoRespiracion && estado == ESTADO_JUEGO) 
+          {
+            ruidoRespiracion.amp(0, 0.8);
+          }
+        }, 400);
+        timeoutsSintesis.push(tRespCaida);
+      }
+
+      if (envRespiracion) 
+      {
+        envRespiracion.setADSR(0.9, 0.4, 0.25, 1.1);
+        envRespiracion.setRange(volPico, 0);
+        try 
+        {
+          envRespiracion.play(ruidoRespiracion);
+        } 
+        catch(e) {}
+      }
+    }
+  } 
+  else if (esAstronauta == true && tipoActual == TIPO_GRIS_CLARO && nivelO2W <= 0) 
+  {
+    // Al llegar a 0 de O2/W: una última exhalación que se desploma
+    if (respiracionMuerteEmitida == false) 
+    {
+      respiracionMuerteEmitida = true;
+      if (ruidoRespiracion && filtroRespiracion) 
+      {
+        // El corte del pasabanda desciende (~600 Hz a ~150 Hz) a lo largo de la exhalación
+        filtroRespiracion.freq(CONFIG_AUDIO_SINTESIS.exhalacionFreqInicio);
+        filtroRespiracion.freq(CONFIG_AUDIO_SINTESIS.exhalacionFreqFin, CONFIG_AUDIO_SINTESIS.exhalacionDuracion);
+
+        // Ataque corto hasta el volumen de exhalación (claramente perceptible)
+        ruidoRespiracion.amp(CONFIG_AUDIO_SINTESIS.exhalacionVolumen, CONFIG_AUDIO_SINTESIS.exhalacionAtaque);
+
+        // Caída lenta (envolvente que se desploma) hasta volumen 0
+        let tCaida = setTimeout(function() 
+        {
+          if (ruidoRespiracion && estado == ESTADO_JUEGO) 
+          {
+            ruidoRespiracion.amp(0, CONFIG_AUDIO_SINTESIS.exhalacionRelease);
+          }
+        }, CONFIG_AUDIO_SINTESIS.exhalacionAtaque * 1000);
+        timeoutsSintesis.push(tCaida);
+
+        let tFin = setTimeout(function() 
+        {
+          if (ruidoRespiracion && estado == ESTADO_JUEGO) 
+          {
+            ruidoRespiracion.amp(0, 0.05);
+          }
+        }, CONFIG_AUDIO_SINTESIS.exhalacionDuracion * 1000);
+        timeoutsSintesis.push(tFin);
+
+        if (envRespiracion) 
+        {
+          envRespiracion.setADSR(
+            CONFIG_AUDIO_SINTESIS.exhalacionAtaque,
+            CONFIG_AUDIO_SINTESIS.exhalacionDecay,
+            CONFIG_AUDIO_SINTESIS.exhalacionSustain,
+            CONFIG_AUDIO_SINTESIS.exhalacionRelease
+          );
+          envRespiracion.setRange(CONFIG_AUDIO_SINTESIS.exhalacionVolumen, 0);
+          try 
+          {
+            envRespiracion.play(ruidoRespiracion);
+          } 
+          catch(e) {}
+        }
+      }
+    }
+  }
+  else 
+  {
+    // Si no está en gris, o es rover, o nivel O2W >= umbral: la respiración se detiene
+    if (ruidoRespiracion && respiracionMuerteEmitida == false && nivelO2W > 0) 
+    {
+      ruidoRespiracion.amp(0, 0.05);
+    }
+  }
+
+  // 2. ROVER EN CELDA ROJA (Zumbido eléctrico sierra ~50-60 Hz)
+  if (esRover == true && tipoActual == TIPO_ROJO && nivelO2W < umbral && nivelO2W > 0) 
+  {
+    let pPerdida = constrain((umbral - nivelO2W) / umbral, 0, 1);
+    let freqRover = lerp(CONFIG_AUDIO_SINTESIS.roverZumbidoFreqBase, CONFIG_AUDIO_SINTESIS.roverZumbidoFreqMin, pPerdida);
+    let volRover = lerp(CONFIG_AUDIO_SINTESIS.roverZumbidoVolMax, CONFIG_AUDIO_SINTESIS.roverZumbidoVolMin, pPerdida);
+
+    // Micro-fluctuación para simular el fallo eléctrico
+    let fluctuacion = 1 + sin(frameCount * 0.4) * 0.15 * pPerdida;
+    oscZumbidoRover.freq(freqRover, 0.05);
+    oscZumbidoRover.amp(volRover * fluctuacion, 0.05);
+  } 
+  else 
+  {
+    if (oscZumbidoRover) 
+    {
+      oscZumbidoRover.amp(0, 0.05);
+    }
+  }
+
+  // Al llegar a 0 de O2/W: rover emite pitido breve de comunicación perdida (senoidal ~1200 Hz)
+  if (esRover == true && tipoActual == TIPO_ROJO && nivelO2W <= 0) 
+  {
+    if (pitidoRoverEmitido == false) 
+    {
+      pitidoRoverEmitido = true;
+      if (oscPitidoRover) 
+      {
+        oscPitidoRover.freq(CONFIG_AUDIO_SINTESIS.roverPitidoFreq);
+        oscPitidoRover.amp(CONFIG_AUDIO_SINTESIS.roverPitidoVol, 0.01);
+        let tRover = setTimeout(function() 
+        {
+          if (oscPitidoRover) 
+          {
+            oscPitidoRover.amp(0, 0.05);
+          }
+        }, CONFIG_AUDIO_SINTESIS.roverPitidoDuracion * 1000);
+        timeoutsSintesis.push(tRover);
+      }
+    }
+  }
+}
+
 //Máquina de estados
 let estado = ESTADO_MENU;
 
@@ -852,12 +1436,6 @@ function draw()
 
       frameUltimoCorteEstatica = frameCount;
     }
-  } 
-  else if (interferenciaActiva == false && musica.isPlaying() == true && 
-  abs(musica.getVolume() - volumenMusica) > 0.01) 
-  {
-    //restaurar volumen normal cuando no hay interferencia
-    musica.amp(volumenMusica, 0.2);
   }
 
   //silenciar la estática una sola vez al terminar la interferencia o al apagar la música
@@ -868,6 +1446,12 @@ function draw()
     duracionTramoInterferencia = 0;
     duracionCorteEstatica = 0;
   }
+
+  //actualización continua de los filtros y efectos acústicos por celda
+  actualizarAudioPorCelda();
+
+  //actualización continua de la síntesis de sonidos críticos por bajo O2/W
+  actualizarSintesisCritica();
 
   limpiarPasoPadMovimientoMovil();
 
@@ -1112,8 +1696,8 @@ function draw()
         }
       }
 
-      //[CUBO] Durante la vibración de impacto (6 frames) se dibuja dinámicamente; luego se usa la capa pre-renderizada
-      if (frameCount - juego.frameVibra < 6) 
+      //[CUBO] Durante la vibración de impacto o colapso se dibuja dinámicamente; luego se usa la capa pre-renderizada
+      if (frameCount - juego.frameVibra < 6 || (juego.resultado == "DERROTA" && juego.detalleResultado == "La plataforma colapsó.")) 
       {
         juego.dibujarPlataforma();
       } 
@@ -1207,7 +1791,8 @@ function draw()
         pop();
       }
 
-      if (juego.resultado != "") 
+      //cuadro con frase y opciones: aparece recién DESPUÉS de que concluyen los efectos visuales
+      if (juego.resultado != "" && efectoFinTerminado() == true) 
       {
         let segundosJugados = floor(framesTranscurridos / 60);
         if (segundosJugados > 60) 
@@ -1279,6 +1864,7 @@ function mousePressed(evento_)
   {
     getAudioContext().resume();
   }
+  iniciarSintesisAudio();
 
   //Móvil: zona de detección más amplia alrededor de los toggles (el dibujo sigue en 40)
   let zonaToggle = esTelefono() ? 72 : 40;
@@ -1341,7 +1927,7 @@ function mousePressed(evento_)
     break;
 
     case ESTADO_JUEGO:
-      if (juego.resultado != "") 
+      if (juego.resultado != "" && efectoFinTerminado() == true) 
       {
         if(mouseOverRect(640, 469, 320, 48))
         {
@@ -1353,11 +1939,31 @@ function mousePressed(evento_)
         if(mouseOverRect(640, 535, 320, 48))
         {
           interferenciaActiva = false;
-          volumenMusica = 0.3;
+          volumenMusica = 0.24;
           if (musica.isPlaying() == true) 
           {
             musica.amp(volumenMusica, 0.1);
           }
+          pesoGris = 0;
+          pesoRojo = 0;
+          pesoVerde = 1;
+          compensacionGrisActual = 1;
+          if (gananciaMusica)
+          {
+            gananciaMusica.amp(1, 0.05);
+          }
+          if (filtroPasaAltos && filtroPasaBajos) 
+          {
+            filtroPasaAltos.freq(AUDIO_CONFIG.limpioHp, 0.05);
+            filtroPasaBajos.freq(AUDIO_CONFIG.limpioLp, 0.05);
+          }
+          if (ruidoInterferencia) 
+          {
+            ruidoInterferencia.amp(0, 0.05);
+          }
+          limpiarSintesisAudio();
+          juego.resultado = "";
+          generarPlataformaCubo();
           estado = ESTADO_MENU;
         }
       }
@@ -1369,6 +1975,12 @@ function mousePressed(evento_)
 conservan su click y no activan los botones dibujados dentro del juego.*/
 function touchStarted(evento_)
 {
+  if (typeof getAudioContext == "function" && getAudioContext().state != "running") 
+  {
+    getAudioContext().resume();
+  }
+  iniciarSintesisAudio();
+
   if (esTelefono() == false || lienzo == undefined || evento_ == undefined ||
   evento_.target != lienzo.elt)
   {
@@ -1544,12 +2156,31 @@ class Juego
     frameUltimoSonidoMeteorito = -10;
     interferenciaActiva = false;
     frameUltimoCorteInterferencia = 0;
-    volumenMusica = 0.12;
+    volumenMusica = 0.22;
 
     if (musica.isPlaying() == true) 
     {
       musica.amp(volumenMusica, 0.1);
     }
+
+    pesoGris = 0;
+    pesoRojo = 0;
+    pesoVerde = 1;
+    compensacionGrisActual = 1;
+    if (gananciaMusica)
+    {
+      gananciaMusica.amp(1, 0.05);
+    }
+    if (filtroPasaAltos && filtroPasaBajos) 
+    {
+      filtroPasaAltos.freq(AUDIO_CONFIG.limpioHp, 0.05);
+      filtroPasaBajos.freq(AUDIO_CONFIG.limpioLp, 0.05);
+    }
+    if (ruidoInterferencia) 
+    {
+      ruidoInterferencia.amp(0, 0.05);
+    }
+    limpiarSintesisAudio();
 
     this.generarFilas();
     this.nivelO2W = 90;
@@ -1975,6 +2606,9 @@ class Fila
     let factorAtm = (this.numeroDeFila - 1) / (totalFilas - 1);
     let cHorizonte = color(CONFIG_CUBO.colorHorizonte[0], CONFIG_CUBO.colorHorizonte[1], CONFIG_CUBO.colorHorizonte[2]);
 
+    let esColapsoPlataforma = (juego && juego.resultado == "DERROTA" && juego.detalleResultado == "La plataforma colapsó.");
+    let framesColapso = esColapsoPlataforma ? (frameCount - juego.frameDeFin) : 999;
+
     noStroke();
 
     for (let columna = 0; columna < this.cantidadColumnas; columna = columna + 1) 
@@ -1983,7 +2617,33 @@ class Fila
       {
         let posX = this.centroX - (this.cantidadColumnas * W) / 2 + columna * W;
 
-        // Vibración de impacto
+        let esOscura = (this.bloques[columna] == TIPO_GRIS_OSCURO);
+        let esAledaña = false;
+        if (!esOscura) 
+        {
+          if (columna > 0 && this.bloques[columna - 1] == TIPO_GRIS_OSCURO) 
+          {
+            esAledaña = true;
+          }
+          if (columna < this.cantidadColumnas - 1 && this.bloques[columna + 1] == TIPO_GRIS_OSCURO) 
+          {
+            esAledaña = true;
+          }
+          if (juego) 
+          {
+            let idxFila = this.numeroDeFila - 1;
+            if (idxFila > 0 && juego.filas[idxFila - 1] && juego.filas[idxFila - 1].bloques[columna] == TIPO_GRIS_OSCURO) 
+            {
+              esAledaña = true;
+            }
+            if (idxFila < juego.filas.length - 1 && juego.filas[idxFila + 1] && juego.filas[idxFila + 1].bloques[columna] == TIPO_GRIS_OSCURO) 
+            {
+              esAledaña = true;
+            }
+          }
+        }
+
+        // Vibración de impacto durante la partida
         let distanciaVibra = abs(juego.filaVibra - this.numeroDeFila) + abs(juego.columnaVibra - columna);
         let vibraX = 0;
         let vibraY = 0;
@@ -1992,6 +2652,45 @@ class Fila
           let intensidadVibra = 1 - distanciaVibra / 4;
           vibraX = random(-5, 5) * intensidadVibra;
           vibraY = random(-4, 4) * intensidadVibra;
+        }
+
+        // Vibración final y desajuste por colapso de la plataforma
+        let desajusteX = 0;
+        let desajusteY = 0;
+
+        if (esColapsoPlataforma) 
+        {
+          // Vibración final de una sola vez
+          if (framesColapso >= 0 && framesColapso < 35) 
+          {
+            let intensidadColapso = 1 - framesColapso / 35;
+            if (esOscura) 
+            {
+              vibraX = random(-8, 8) * intensidadColapso;
+              vibraY = random(-6, 6) * intensidadColapso;
+            } 
+            else if (esAledaña) 
+            {
+              vibraX = random(-5, 5) * intensidadColapso * 0.7;
+              vibraY = random(-4, 4) * intensidadColapso * 0.7;
+            }
+          }
+
+          // Ligero desajuste de posición que persiste hasta reiniciar o presionar Inicio
+          let seedCelda = columna * 7.13 + this.numeroDeFila * 13.37;
+          let offsetBaseX = sin(seedCelda) * 6;
+          let offsetBaseY = cos(seedCelda * 1.5) * 4;
+
+          if (esOscura) 
+          {
+            desajusteX = offsetBaseX;
+            desajusteY = offsetBaseY;
+          } 
+          else if (esAledaña) 
+          {
+            desajusteX = offsetBaseX * 0.55;
+            desajusteY = offsetBaseY * 0.55;
+          }
         }
 
         let cBase = colorDeTipo(this.bloques[columna]);
@@ -2006,33 +2705,58 @@ class Fila
         let esExtremoDer = (columna == this.columnaFin - 1);
         let incLat = CONFIG_CUBO.inclinacionLateral;
 
-        let xTL = posX + vibraX + (esExtremoIzq ? incLat : 0);
-        let xTR = posX + W + vibraX - (esExtremoDer ? incLat : 0);
-        let xBL = posX + vibraX;
-        let xBR = posX + W + vibraX;
+        let xTL = posX + vibraX + desajusteX + (esExtremoIzq ? incLat : 0);
+        let xTR = posX + W + vibraX + desajusteX - (esExtremoDer ? incLat : 0);
+        let xBL = posX + vibraX + desajusteX;
+        let xBR = posX + W + vibraX + desajusteX;
 
         // 1. Cara frontal (cuadrado)
         fill(cFrontal);
-        rect(posX + vibraX, yFront + vibraY, W, W);
+        rect(posX + vibraX + desajusteX, yFront + vibraY + desajusteY, W, W);
 
         // 2. Tapa superior (techo recto al centro, inclinado en celdas laterales finales)
         fill(cTapa);
-        quad(xTL, yTapa + vibraY, xTR, yTapa + vibraY, xBR, yFront + vibraY, xBL, yFront + vibraY);
+        quad(xTL, yTapa + vibraY + desajusteY, xTR, yTapa + vibraY + desajusteY, xBR, yFront + vibraY + desajusteY, xBL, yFront + vibraY + desajusteY);
 
         // 3. Aristas de 1 px
         fill(lerpColor(cTapa, color(255), 0.3));
-        rect(xTL, yTapa + vibraY, xTR - xTL, 1);
+        rect(xTL, yTapa + vibraY + desajusteY, xTR - xTL, 1);
         if (esExtremoIzq) 
         {
-          quad(xBL, yFront + vibraY, xBL + 1, yFront + vibraY, xTL + 1, yTapa + vibraY, xTL, yTapa + vibraY);
+          quad(xBL, yFront + vibraY + desajusteY, xBL + 1, yFront + vibraY + desajusteY, xTL + 1, yTapa + vibraY + desajusteY, xTL, yTapa + vibraY + desajusteY);
         }
         if (esExtremoDer) 
         {
-          quad(xBR - 1, yFront + vibraY, xBR, yFront + vibraY, xTR, yTapa + vibraY, xTR - 1, yTapa + vibraY);
+          quad(xBR - 1, yFront + vibraY + desajusteY, xBR, yFront + vibraY + desajusteY, xTR, yTapa + vibraY + desajusteY, xTR - 1, yTapa + vibraY + desajusteY);
         }
         fill(lerpColor(cFrontal, color(0), 0.35));
-        rect(posX + vibraX, yFront + W - 1 + vibraY, W, 1);
+        rect(posX + vibraX + desajusteX, yFront + W - 1 + vibraY + desajusteY, W, 1);
       }
+    }
+
+    // 4. Sombra de contacto de la terraza superior sobre la terraza inferior
+    if (this.numeroDeFila < totalFilas) 
+    {
+      let xInicioFila = this.centroX - (this.cantidadColumnas * W) / 2 + this.columnaInicio * W;
+      let xFinFila = this.centroX - (this.cantidadColumnas * W) / 2 + this.columnaFin * W;
+      let incLat = CONFIG_CUBO.inclinacionLateral;
+      let atenuacionAtm = 1 - 0.25 * (this.numeroDeFila / (totalFilas - 1));
+
+      let dx0 = round(incLat * (1 - 0 / altoTapa));
+      fill(0, 0, 0, round(120 * atenuacionAtm));
+      rect(xInicioFila + dx0, yTapa, (xFinFila - dx0) - (xInicioFila + dx0), 3);
+
+      let dx1 = round(incLat * (1 - 3 / altoTapa));
+      fill(0, 0, 0, round(85 * atenuacionAtm));
+      rect(xInicioFila + dx1, yTapa + 3, (xFinFila - dx1) - (xInicioFila + dx1), 3);
+
+      let dx2 = round(incLat * (1 - 6 / altoTapa));
+      fill(0, 0, 0, round(50 * atenuacionAtm));
+      rect(xInicioFila + dx2, yTapa + 6, (xFinFila - dx2) - (xInicioFila + dx2), 3);
+
+      let dx3 = round(incLat * (1 - 9 / altoTapa));
+      fill(0, 0, 0, round(20 * atenuacionAtm));
+      rect(xInicioFila + dx3, yTapa + 9, (xFinFila - dx3) - (xInicioFila + dx3), 3);
     }
   }
 }
@@ -2186,7 +2910,7 @@ class Astronauta
       }
       if (tipoActual == TIPO_ROJO) 
       {
-        this.atrapado = true;
+        this.atrapado = false;
         interferenciaActiva = true;
       }
 
@@ -2240,26 +2964,55 @@ class Astronauta
   al traje del bloque que pisa*/
   dibujar() 
   {
+    let esImpactoMeteorito = (juego && juego.resultado == "DERROTA" && juego.detalleResultado == "Un meteorito te impactó directamente.");
+    let framesImpacto = esImpactoMeteorito ? (frameCount - juego.frameDeFin) : 0;
+
+    //desvanecimiento total inmediato tras recibir la vibración violenta inicial
+    if (esImpactoMeteorito && framesImpacto > 55) 
+    {
+      return;
+    }
+
+    let alfaImpacto = esImpactoMeteorito ? max(0, map(framesImpacto, 8, 55, 1, 0)) : 1;
+
     //sombra de contacto sobre la superficie, para asentar al personaje en la plataforma
     push();
+    if (esImpactoMeteorito) 
+    {
+      drawingContext.globalAlpha = alfaImpacto;
+    }
     noStroke();
     fill(0, 0, 0, 90);
     ellipse(this.x, this.y - 3, 34, 8);
     pop();
 
-    /*vibración breve en función de la distancia al impacto: máxima en su celda y menor 
-    cuanto más lejos, hasta desaparecer a 4 columnas*/
+    /*vibración violenta si hubo impacto directo de meteorito, o breve si fue impacto cercano*/
     let vibraX = 0;
     let vibraY = 0;
-    let distanciaVibra = abs(juego.columnaVibra - this.columna);
-    if (frameCount - juego.frameVibra < 8 && distanciaVibra < 4) 
+
+    if (esImpactoMeteorito) 
     {
-      let intensidadVibra = 1 - distanciaVibra / 4;
-      vibraX = random(-3, 3) * intensidadVibra;
-      vibraY = random(-2, 2) * intensidadVibra;
+      //vibración violenta de pocos segundos que va decayendo
+      let intensidadViolenta = max(0, 1 - framesImpacto / 80);
+      vibraX = random(-14, 14) * intensidadViolenta;
+      vibraY = random(-10, 10) * intensidadViolenta;
+    } 
+    else 
+    {
+      let distanciaVibra = abs(juego.columnaVibra - this.columna);
+      if (frameCount - juego.frameVibra < 8 && distanciaVibra < 4) 
+      {
+        let intensidadVibra = 1 - distanciaVibra / 4;
+        vibraX = random(-3, 3) * intensidadVibra;
+        vibraY = random(-2, 2) * intensidadVibra;
+      }
     }
 
     push();
+    if (esImpactoMeteorito) 
+    {
+      drawingContext.globalAlpha = alfaImpacto;
+    }
     translate(this.x + vibraX, this.y - 18 + vibraY);
     noStroke();
 
@@ -2527,7 +3280,7 @@ class Meteorito
       juego_.columnaVibra = this.columnaObjetivo;
       juego_.frameVibra = frameCount;
       juego_.frameDeFin = frameCount;
-      volumenMusica = 0.05;
+      volumenMusica = 0.12;
       if (musica.isPlaying() == true) 
       {
         musica.amp(volumenMusica, 0.05);
